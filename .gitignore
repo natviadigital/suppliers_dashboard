@@ -1,0 +1,8 @@
+node_modules
+dist
+.env.local
+*.xlsx
+*.xls
+*.csv
+~$*
+.DS_Store
