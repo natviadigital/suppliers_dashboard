@@ -1,30 +1,125 @@
 import * as XLSX from 'xlsx'
 
 // Header in file -> column in public.open_orders.
-// "VTC COMMENTS" appears twice: 1st -> vtc_comments, 2nd -> vtc_comments_2
+// Supports both the legacy format and the new format (PO Nbr, Div, Itm, Part.Number, Ship{Date, etc.)
+// "VTC COMMENTS" appears twice in some files: 1st -> vtc_comments, 2nd -> vtc_comments_2
 const HEADER_MAP = {
+  // Line ID
   'ID': 'line_id',
-  'DIV': 'div',
-  'CLASS': 'class',
-  'BYR': 'buyer',
-  'VENDOR': 'vendor_code',
-  'VENDOR NAME': 'vendor_name',
+  'LINE ID': 'line_id',
+
+  // PO
   'PO': 'po',
+  'PO NBR': 'po',
+  'PO NUMBER': 'po',
+  'PO NO': 'po',
+  'PO #': 'po',
+  'PURCHASE ORDER': 'po',
+
+  // Div
+  'DIV': 'div',
+  'DIVISION': 'div',
+  'PLANT': 'div',
+
+  // Item / Line
   'ITM': 'item',
-  'PART NUMBER': 'part_number',
-  'DESCRIPTION': 'description',
-  'VEN.PART.NBR': 'vendor_part_number',
+  'ITEM': 'item',
+  'LINE': 'item',
+  'LINE NBR': 'item',
+  'LINE NO': 'item',
+
+  // Buyer
+  'BYR': 'buyer',
+  'BUYER': 'buyer',
+
+  // Vendor Code
+  'VENDOR': 'vendor_code',
+  'VENDOR CODE': 'vendor_code',
+  'VENDOR NBR': 'vendor_code',
+  'VENDOR NO': 'vendor_code',
+  'VENDOR #': 'vendor_code',
+  'SUPPLIER': 'vendor_code',
+  'SUPPLIER CODE': 'vendor_code',
+
+  // Vendor Name
+  'VENDOR NAME': 'vendor_name',
+  'SUPPLIER NAME': 'vendor_name',
+
+  // PO Date
   'PO DATE': 'po_date',
-  'SHIP DATE': 'ship_date',
+  'ORDER DATE': 'po_date',
+
+  // Part Number
+  'PART NUMBER': 'part_number',
+  'PART.NUMBER': 'part_number',
+  'PART NO': 'part_number',
+  'PART NBR': 'part_number',
+  'PART': 'part_number',
+  'ITEM NUMBER': 'part_number',
+
+  // Description
+  'DESCRIPTION': 'description',
+  'DESC': 'description',
+  'PART DESCRIPTION': 'description',
+
+  // Vendor Part Number
+  'VEN.PART.NBR': 'vendor_part_number',
+  'VEN PART.NBR': 'vendor_part_number',
+  'VEN PART NBR': 'vendor_part_number',
+  'VENDOR PART NUMBER': 'vendor_part_number',
+  'VENDOR PART NO': 'vendor_part_number',
+  'VEN.PART.NO': 'vendor_part_number',
+
+  // Delivery Date
   'DELIVERY DATE': 'delivery_date',
-  'ORD QTY': 'ord_qty',
-  'BAL QTY': 'bal_qty',
-  'UNIT PRICE': 'unit_price',
-  'EXT PRICE': 'ext_price',
+  'DLV DATE': 'delivery_date',
+  'DELIVERY': 'delivery_date',
+  'DUE DATE': 'delivery_date',
+
+  // Line Confirmation
   'LINE CONFIRMED': 'line_confirmed',
-  'REMARKS': 'remarks',
+  'CONF CODE': 'line_confirmed',
+  'CONF{CODE': 'line_confirmed',
+  'CONFIRMATION': 'line_confirmed',
+  'CONF STATUS': 'line_confirmed',
+
+  // Ship Date
+  'SHIP DATE': 'ship_date',
+  'SHIP{DATE': 'ship_date',
+  'SHIPPED DATE': 'ship_date',
+  'PROMISED DATE': 'ship_date',
+  'PROMISE DATE': 'ship_date',
+
+  // Quantities
+  'ORD QTY': 'ord_qty',
+  'ORDER QTY': 'ord_qty',
+  'ORDERED QTY': 'ord_qty',
+  'QTY ORDERED': 'ord_qty',
+
+  'BAL QTY': 'bal_qty',
+  'BALANCE QTY': 'bal_qty',
+  'OPEN QTY': 'bal_qty',
+  'REMAINING QTY': 'bal_qty',
+
+  // Prices
+  'UNIT PRICE': 'unit_price',
+  'PRICE': 'unit_price',
+  'EXT PRICE': 'ext_price',
+  'EXTENDED PRICE': 'ext_price',
+
+  // Job Reference
   'JOB REFERENCE': 'job_reference',
+  'JOB': 'job_reference',
+  'ROUTE TO/JOBS': 'job_reference',
+  'ROUTE TO / JOBS': 'job_reference',
+  'ROUTE TO': 'job_reference',
+
+  // Remarks & Comments
+  'REMARKS': 'remarks',
+  'REMARK': 'remarks',
+  'COMMENTS': 'remarks',
   'PO STATUS': 'po_status',
+  'STATUS': 'po_status',
   'VTC COMMENTS': ['vtc_comments', 'vtc_comments_2'],
   "EPPM'S/HOT LIST": 'eppm_hot_list',
   'TRACKING/CONTAINER #': 'tracking_container',
@@ -34,14 +129,26 @@ const HEADER_MAP = {
   'CONTROL #': 'control_number',
   'IMPO DATE': 'impo_date',
   'SUPPLIER COMMENTS': 'supplier_comments',
+  'CLASS': 'class',
 }
 
-const REQUIRED = ['PART NUMBER', 'BAL QTY', 'SHIP DATE', 'VENDOR']
+const REQUIRED_FIELDS = [
+  { field: 'part_number', label: 'PART NUMBER' },
+  { field: 'bal_qty', label: 'BAL QTY' },
+  { field: 'ship_date', label: 'SHIP DATE' },
+  { field: 'vendor_code', label: 'VENDOR' },
+]
+
 const DATE_COLS = new Set(['po_date', 'ship_date', 'delivery_date'])
 const INT_COLS = new Set(['div', 'item'])
 const NUM_COLS = new Set(['ord_qty', 'bal_qty', 'unit_price', 'ext_price'])
 
-const normHeader = (h) => String(h ?? '').replace(/\s+/g, ' ').trim().toUpperCase()
+export const normHeader = (h) =>
+  String(h ?? '')
+    .replace(/[{}_]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toUpperCase()
 
 const pad = (n) => String(n).padStart(2, '0')
 
@@ -92,29 +199,53 @@ export async function parseOpenOrderFile(file) {
   const ws = wb.Sheets[wb.SheetNames[0]]
   const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true, blankrows: false })
 
-  // Find header row (first row containing "PART NUMBER")
-  const headerIdx = matrix.findIndex((r) => r.some((c) => normHeader(c) === 'PART NUMBER'))
-  if (headerIdx < 0) throw new Error('Could not find a header row with "PART NUMBER".')
-  const headers = matrix[headerIdx].map(normHeader)
+  const isPartMatch = (c) => {
+    const h = normHeader(c)
+    return h === 'PART NUMBER' || h === 'PART.NUMBER' || h === 'PART NO' || h === 'PART NBR' || h === 'PART'
+  }
 
-  const missing = REQUIRED.filter((h) => !headers.includes(h))
-  if (missing.length) throw new Error(`Missing required column(s): ${missing.join(', ')}`)
+  // Find header row (row containing PART NUMBER or BAL QTY)
+  const headerIdx = matrix.findIndex((r) => {
+    if (!Array.isArray(r)) return false
+    const rowHeaders = r.map(normHeader)
+    return rowHeaders.some(isPartMatch) || rowHeaders.some((h) => h === 'BAL QTY' || h === 'BALANCE QTY')
+  })
 
-  // Column index -> db field
+  if (headerIdx < 0) {
+    throw new Error('Could not find a header row with "PART NUMBER" or "BAL QTY".')
+  }
+
+  const rawHeaders = matrix[headerIdx]
   const seen = {}
-  const colMap = headers.map((h) => {
-    const target = HEADER_MAP[h]
+  const colMap = rawHeaders.map((h) => {
+    const nh = normHeader(h)
+    let target = HEADER_MAP[nh]
+    if (!target) {
+      target = HEADER_MAP[nh.replace(/\./g, ' ')] || HEADER_MAP[nh.replace(/\./g, '')]
+    }
     if (!target) return null
     if (Array.isArray(target)) {
-      const i = seen[h] = (seen[h] ?? -1) + 1
+      const i = seen[nh] = (seen[nh] ?? -1) + 1
       return target[i] ?? null
     }
     return target
   })
 
+  // Validate required fields
+  const mappedFields = new Set(colMap.filter(Boolean))
+  const missing = REQUIRED_FIELDS.filter((rf) => !mappedFields.has(rf.field))
+  if (missing.length) {
+    throw new Error(`Missing required column(s): ${missing.map((m) => m.label).join(', ')}`)
+  }
+
   const warnings = []
-  const unknown = headers.filter((h, i) => h && !colMap[i])
-  if (unknown.length) warnings.push(`Ignored unknown column(s): ${unknown.join(', ')}`)
+  const unknown = rawHeaders.filter((h, i) => h && !colMap[i])
+  if (unknown.length) {
+    warnings.push(`Ignored extra column(s): ${unknown.map((u) => String(u).trim()).join(', ')}`)
+  }
+
+  const today = new Date().toISOString().slice(0, 10)
+  const next7 = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10)
 
   const rows = []
   for (const r of matrix.slice(headerIdx + 1)) {
@@ -128,6 +259,23 @@ export async function parseOpenOrderFile(file) {
       else row[field] = toText(v)
     })
     if (!row.part_number) continue
+
+    // Auto-fill line_id if missing (e.g. "571931*9")
+    if (!row.line_id && row.po) {
+      row.line_id = (row.item !== null && row.item !== undefined) ? `${row.po}*${row.item}` : String(row.po)
+    }
+
+    // Auto-compute po_status if missing from file
+    if (!row.po_status && row.ship_date) {
+      if (row.ship_date < today) {
+        row.po_status = 'PAST DUE'
+      } else if (row.ship_date <= next7) {
+        row.po_status = 'DUE IN 7 DAYS'
+      } else {
+        row.po_status = 'ON TIME'
+      }
+    }
+
     rows.push(row)
   }
   return { rows, warnings }
