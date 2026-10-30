@@ -1,6 +1,21 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useRef, useEffect } from 'react'
 import { ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, Legend, CartesianGrid, Brush } from 'recharts'
-import { AlertTriangle, Boxes, ClipboardList, Clock, Factory, Sparkles, Eye, EyeOff } from 'lucide-react'
+import {
+  AlertTriangle,
+  Boxes,
+  ClipboardList,
+  Clock,
+  Factory,
+  Sparkles,
+  Eye,
+  EyeOff,
+  Download,
+  ChevronDown,
+  Filter,
+  FileSpreadsheet,
+  Layers,
+  Loader2,
+} from 'lucide-react'
 import { useData } from '../lib/DataContext'
 import FilterBar from '../components/FilterBar'
 import Modal from '../components/Modal'
@@ -8,6 +23,8 @@ import OrderLinesTable from '../components/OrderLinesTable'
 import { applyFilters, aggregateCategory } from '../lib/aggregate'
 import { buildBuckets, bucketOf, PAST_DUE, todayISO } from '../lib/periods'
 import { fmtNum, fmtCompact, utilLevel, LEVEL_STYLES, pct } from '../lib/format'
+import { exportOrdersToExcel } from '../lib/exportOrders'
+import { loadRawOpenOrders } from '../lib/api'
 
 const RANGES = {
   week: [[12, '12 weeks'], [26, '26 weeks'], [52, '52 weeks'], [0, 'All (to Dec ' + (new Date().getFullYear() + 2) + ')']],
@@ -19,6 +36,7 @@ export default function Dashboard({ filters, setFilters }) {
     master,
     lookups,
     orders,
+    rawOrders,
     simulatedOrders,
     upload,
     activeScenario,
@@ -31,7 +49,23 @@ export default function Dashboard({ filters, setFilters }) {
   const [range, setRange] = useState({ week: 26, month: 12 })
   const [selectedCat, setSelectedCat] = useState(null)
   const [drill, setDrill] = useState(null)
+  const [exportMenuOpen, setExportMenuOpen] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const exportMenuRef = useRef(null)
   const today = todayISO()
+
+  // Close export dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target)) {
+        setExportMenuOpen(false)
+      }
+    }
+    if (exportMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside)
+      return () => document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [exportMenuOpen])
 
   // Use simulated orders if simulation is toggled ON, otherwise actual orders
   const effectiveOrders = simulationActive ? simulatedOrders : orders
@@ -74,6 +108,83 @@ export default function Dashboard({ filters, setFilters }) {
     pastDue: scoped.filter((o) => o.ship_date && o.ship_date < today).length,
     suppliers: new Set(scoped.map((o) => o.vendor_code)).size,
     over: Object.values(aggs).reduce((s, a) => s + a.overCells, 0),
+  }
+
+  // Active filters description list
+  const activeFiltersList = useMemo(() => {
+    const list = []
+    if (filters.division) {
+      const name = lookups?.divisionByCode?.[filters.division] || `Div ${filters.division}`
+      list.push(`Plant: ${name}`)
+    }
+    if (filters.supplier) {
+      const name = lookups?.vendorByCode?.[filters.supplier]?.vendor_name || filters.supplier
+      list.push(`Supplier: ${name}`)
+    }
+    if (filters.category) {
+      const cat = master?.categories?.find((c) => String(c.id) === String(filters.category))
+      list.push(`Category: ${cat?.name || filters.category}`)
+    }
+    if (filters.buyer) {
+      list.push(`Buyer: ${filters.buyer}`)
+    }
+    return list
+  }, [filters, lookups, master])
+
+  const hasActiveFilters = activeFiltersList.length > 0
+  const activeFilterSummary = activeFiltersList.join(', ')
+
+  // Export handlers
+  const handleExport = async (type) => {
+    setExporting(true)
+    try {
+      if (type === 'filtered') {
+        const fileTag = hasActiveFilters
+          ? `_filtered_${activeFiltersList.join('_').slice(0, 35)}`
+          : '_filtered'
+        exportOrdersToExcel({
+          orders: scoped,
+          fileName: `open_orders${fileTag}_${today}`,
+          sheetName: hasActiveFilters ? 'Filtered Orders' : 'Open Orders',
+          lookups,
+          isSimulated: simulationActive,
+        })
+      } else if (type === 'monitored') {
+        exportOrdersToExcel({
+          orders: effectiveOrders,
+          fileName: `monitored_open_orders_${today}`,
+          sheetName: 'Monitored Orders',
+          lookups,
+          isSimulated: simulationActive,
+        })
+      } else if (type === 'raw') {
+        let allRows = rawOrders
+        if (!allRows || !allRows.length) {
+          allRows = await loadRawOpenOrders()
+        }
+        exportOrdersToExcel({
+          orders: allRows,
+          fileName: `all_open_orders_${today}`,
+          sheetName: 'All Open Orders',
+          lookups,
+          isSimulated: false,
+        })
+      } else if (type === 'activeCat' && activeCat) {
+        const catOrders = effectiveOrders.filter((o) => o.category_id === activeCat.id)
+        exportOrdersToExcel({
+          orders: catOrders,
+          fileName: `open_orders_${activeCat.name.slice(0, 20)}_${today}`,
+          sheetName: activeCat.name.slice(0, 31),
+          lookups,
+          isSimulated: simulationActive,
+        })
+      }
+    } catch (err) {
+      alert('Error exporting orders: ' + err.message)
+    } finally {
+      setExporting(false)
+      setExportMenuOpen(false)
+    }
   }
 
   if (!upload) {
@@ -144,7 +255,129 @@ export default function Dashboard({ filters, setFilters }) {
           </h1>
           <p className="text-sm text-slate-500">Open balance (BAL QTY) by ship date vs. weekly supplier capacity</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* Export Dropdown Menu */}
+          <div className="relative" ref={exportMenuRef}>
+            <button
+              type="button"
+              onClick={() => setExportMenuOpen(!exportMenuOpen)}
+              disabled={exporting}
+              className={`btn px-3.5 py-1.5 rounded-lg text-sm font-medium flex items-center gap-2 shadow-xs transition cursor-pointer ${
+                hasActiveFilters
+                  ? 'bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100'
+                  : 'bg-white hover:bg-slate-50 text-slate-700 border border-slate-300'
+              }`}
+              title="Export open orders to Excel"
+            >
+              {exporting ? (
+                <Loader2 size={16} className="animate-spin text-indigo-600" />
+              ) : (
+                <Download size={16} className={hasActiveFilters ? 'text-indigo-600' : 'text-slate-500'} />
+              )}
+              <span>Export Open Orders</span>
+              <ChevronDown size={14} className={`text-slate-400 transition-transform ${exportMenuOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {exportMenuOpen && (
+              <div className="absolute right-0 mt-2 w-84 bg-white rounded-xl shadow-xl border border-slate-200 py-2 z-40 text-left">
+                <div className="px-4 py-1.5 border-b border-slate-100 text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                  <span>Export to Excel (.xlsx)</span>
+                  {simulationActive && <span className="text-[10px] text-amber-600 font-mono">SIMULATION ACTIVE</span>}
+                </div>
+
+                {/* Option 1: Filtered */}
+                <button
+                  type="button"
+                  onClick={() => handleExport('filtered')}
+                  className="w-full px-4 py-2.5 hover:bg-indigo-50/70 text-left flex items-start gap-3 transition cursor-pointer"
+                >
+                  <span className="p-1.5 rounded-lg bg-indigo-100 text-indigo-700 mt-0.5 shrink-0">
+                    <Filter size={16} />
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-slate-800 flex items-center justify-between">
+                      <span>Export Filtered Orders</span>
+                      <span className="text-xs font-mono font-bold text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-200">
+                        {fmtNum(scoped.length)}
+                      </span>
+                    </div>
+                    <div className="text-xs text-slate-500 truncate mt-0.5" title={hasActiveFilters ? activeFilterSummary : 'Matches active dashboard filters'}>
+                      {hasActiveFilters ? activeFilterSummary : 'Matches current dashboard view'}
+                    </div>
+                  </div>
+                </button>
+
+                {/* Option 2: Active Category (if no category filter set) */}
+                {activeCat && !filters.category && (
+                  <button
+                    type="button"
+                    onClick={() => handleExport('activeCat')}
+                    className="w-full px-4 py-2.5 hover:bg-purple-50/70 text-left flex items-start gap-3 transition cursor-pointer"
+                  >
+                    <span className="p-1.5 rounded-lg bg-purple-100 text-purple-700 mt-0.5 shrink-0">
+                      <Boxes size={16} />
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-semibold text-slate-800 flex items-center justify-between">
+                        <span>Selected Category</span>
+                        <span className="text-xs font-mono font-bold text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded border border-purple-200">
+                          {fmtNum(effectiveOrders.filter((o) => o.category_id === activeCat.id).length)}
+                        </span>
+                      </div>
+                      <div className="text-xs text-slate-500 truncate mt-0.5">
+                        {activeCat.name} only
+                      </div>
+                    </div>
+                  </button>
+                )}
+
+                {/* Option 3: All Monitored */}
+                <button
+                  type="button"
+                  onClick={() => handleExport('monitored')}
+                  className="w-full px-4 py-2.5 hover:bg-emerald-50/70 text-left flex items-start gap-3 transition cursor-pointer"
+                >
+                  <span className="p-1.5 rounded-lg bg-emerald-100 text-emerald-700 mt-0.5 shrink-0">
+                    <FileSpreadsheet size={16} />
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-slate-800 flex items-center justify-between">
+                      <span>All Monitored Orders</span>
+                      <span className="text-xs font-mono font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                        {fmtNum(effectiveOrders.length)}
+                      </span>
+                    </div>
+                    <div className="text-xs text-slate-500 mt-0.5">
+                      All monitored insulation lines (excludes inter-plant)
+                    </div>
+                  </div>
+                </button>
+
+                {/* Option 4: Complete Raw File */}
+                <button
+                  type="button"
+                  onClick={() => handleExport('raw')}
+                  className="w-full px-4 py-2.5 hover:bg-slate-100 text-left flex items-start gap-3 transition cursor-pointer border-t border-slate-100"
+                >
+                  <span className="p-1.5 rounded-lg bg-slate-100 text-slate-700 mt-0.5 shrink-0">
+                    <Layers size={16} />
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-slate-800 flex items-center justify-between">
+                      <span>Complete Raw Open Orders</span>
+                      <span className="text-xs font-mono font-bold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                        {fmtNum(rawOrders?.length || upload?.total_rows || 0)}
+                      </span>
+                    </div>
+                    <div className="text-xs text-slate-500 mt-0.5">
+                      Full master open order table (all commodities)
+                    </div>
+                  </div>
+                </button>
+              </div>
+            )}
+          </div>
+
           <div className="inline-flex rounded-lg border border-slate-300 bg-white p-0.5">
             {['week', 'month'].map((m) => (
               <button key={m} onClick={() => setMode(m)}
@@ -198,12 +431,26 @@ export default function Dashboard({ filters, setFilters }) {
       </div>
 
       {activeCat && agg && (
-        <CategoryDetail category={activeCat} agg={agg} buckets={buckets} mode={mode}
-          onCell={(supplier, bucket) => setDrill({ supplier, bucket })} />
+        <CategoryDetail
+          category={activeCat}
+          agg={agg}
+          buckets={buckets}
+          mode={mode}
+          onCell={(supplier, bucket) => setDrill({ supplier, bucket })}
+          onExportCategory={() => handleExport('activeCat')}
+        />
       )}
 
       {drill && (
-        <DrillDown drill={drill} category={activeCat} mode={mode} today={today} onClose={() => setDrill(null)} />
+        <DrillDown
+          drill={drill}
+          category={activeCat}
+          mode={mode}
+          today={today}
+          lookups={lookups}
+          isSimulated={simulationActive}
+          onClose={() => setDrill(null)}
+        />
       )}
     </div>
   )
@@ -221,7 +468,7 @@ function Kpi({ icon: Icon, label, value, tone, hint }) {
   )
 }
 
-function CategoryDetail({ category, agg, buckets, mode, onCell }) {
+function CategoryDetail({ category, agg, buckets, mode, onCell, onExportCategory }) {
   const { suppliers, chartData, totals, weeklyCapTotal, demand } = agg
   const unit = category.unit
   const periodWord = mode === 'week' ? 'week' : 'month'
@@ -229,15 +476,25 @@ function CategoryDetail({ category, agg, buckets, mode, onCell }) {
 
   return (
     <div className="card">
-      <div className="p-5 border-b border-slate-200 flex flex-wrap justify-between gap-4">
+      <div className="p-5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="text-lg font-semibold text-slate-900">{category.name}</h2>
           <p className="text-sm text-slate-500">Load per {periodWord} by supplier · unit: {unit}</p>
         </div>
-        <div className="flex gap-6 text-sm">
+        <div className="flex flex-wrap items-center gap-6 text-sm">
           <Stat label="Total weekly capacity" value={weeklyCapTotal ? fmtNum(weeklyCapTotal) : 'Not defined'} />
           <Stat label="Weekly demand" value={demand ? fmtNum(demand) : 'Not defined'} />
           <Stat label="Open balance" value={fmtNum(agg.totalOpen)} />
+          {onExportCategory && (
+            <button
+              type="button"
+              onClick={onExportCategory}
+              className="btn-outline text-xs px-2.5 py-1.5 flex items-center gap-1.5 cursor-pointer shadow-2xs hover:bg-slate-50"
+              title={`Export open orders for ${category.name}`}
+            >
+              <Download size={13} /> Export Category
+            </button>
+          )}
         </div>
       </div>
 
@@ -374,15 +631,36 @@ function ChartTooltip({ active, payload, label, suppliers, unit }) {
   )
 }
 
-function DrillDown({ drill, category, mode, today, onClose }) {
+function DrillDown({ drill, category, mode, today, lookups, isSimulated, onClose }) {
   const { supplier, bucket } = drill
   const lines = supplier.lines
     .filter((o) => bucketOf(o.ship_date, mode, today) === bucket.key)
     .sort((a, b) => (a.ship_date ?? '').localeCompare(b.ship_date ?? ''))
   const total = lines.reduce((s, o) => s + (Number(o.bal_qty) || 0), 0)
+
+  const handleExportDrill = () => {
+    exportOrdersToExcel({
+      orders: lines,
+      fileName: `open_orders_${supplier.name}_${category.name}_${bucket.key}_${today}`,
+      sheetName: `${supplier.name.slice(0, 15)} ${bucket.key}`,
+      lookups,
+      isSimulated,
+    })
+  }
+
   return (
     <Modal wide onClose={onClose} title={`${supplier.name} · ${category.name}`}
       subtitle={`${bucket.label} ${bucket.sub} — ${lines.length} lines · ${fmtNum(total)} ${category.unit}`}>
+      <div className="mb-3 flex justify-end">
+        <button
+          type="button"
+          onClick={handleExportDrill}
+          className="btn-outline text-xs px-3 py-1.5 flex items-center gap-1.5 cursor-pointer shadow-2xs hover:bg-slate-50"
+          title={`Export ${lines.length} lines to Excel`}
+        >
+          <Download size={14} /> Export {lines.length} lines to Excel
+        </button>
+      </div>
       <OrderLinesTable lines={lines} showCategory={false} showSupplier={false} />
     </Modal>
   )

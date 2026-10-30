@@ -1,16 +1,16 @@
 import { useMemo, useState } from 'react'
-import * as XLSX from 'xlsx'
 import { Download, Search } from 'lucide-react'
 import { useData } from '../lib/DataContext'
 import FilterBar from '../components/FilterBar'
 import OrderLinesTable from '../components/OrderLinesTable'
 import { applyFilters } from '../lib/aggregate'
 import { fmtNum } from '../lib/format'
+import { exportOrdersToExcel } from '../lib/exportOrders'
 
 const PAGE = 200
 
 export default function OpenOrders({ filters, setFilters }) {
-  const { orders } = useData()
+  const { orders, lookups } = useData()
   const [q, setQ] = useState('')
   const [page, setPage] = useState(0)
 
@@ -26,15 +26,12 @@ export default function OpenOrders({ filters, setFilters }) {
   const total = rows.reduce((s, o) => s + (Number(o.bal_qty) || 0), 0)
 
   const exportXlsx = () => {
-    const data = rows.map((o) => ({
-      PO: o.po, ITM: o.item, DIV: o.div, DIVISION: o.division_name, 'VENDOR': o.vendor_code, 'SUPPLIER': o.supplier_name,
-      CATEGORY: o.category_name, PREFIX: o.prefix, 'PART NUMBER': o.part_number, DESCRIPTION: o.description, BYR: o.buyer,
-      'PO DATE': o.po_date, 'SHIP DATE': o.ship_date, 'DELIVERY DATE': o.delivery_date, 'ORD QTY': o.ord_qty, 'BAL QTY': o.bal_qty,
-      'PO STATUS': o.po_status, 'LINE CONFIRMED': o.line_confirmed, REMARKS: o.remarks,
-    }))
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), 'Monitored Open Orders')
-    XLSX.writeFile(wb, `monitored_open_orders_${new Date().toISOString().slice(0, 10)}.xlsx`)
+    exportOrdersToExcel({
+      orders: rows,
+      fileName: `monitored_open_orders_${new Date().toISOString().slice(0, 10)}`,
+      sheetName: 'Monitored Open Orders',
+      lookups,
+    })
   }
 
   return (
