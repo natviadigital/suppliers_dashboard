@@ -31,6 +31,7 @@ export default function Simulator() {
     master,
     lookups,
     orders,
+    rawOrders,
     scenarios,
     activeScenario,
     activeScenarioId,
@@ -62,6 +63,26 @@ export default function Simulator() {
   const fileInputRef = useRef(null)
   const today = todayISO()
 
+  // Use rawOrders if available to ensure orders with unclassified prefixes (like 1211, 1210) are fully accessible in simulator
+  const allOrdersPool = useMemo(() => {
+    return rawOrders && rawOrders.length ? rawOrders : orders
+  }, [rawOrders, orders])
+
+  // Lookup map for fast retrieval of original PO data across ALL orders in the system
+  const orderLookupMap = useMemo(() => {
+    const map = new Map()
+    for (const o of allOrdersPool) {
+      const key = `${String(o.po).trim()}*${String(o.item).trim()}`
+      if (!map.has(key)) map.set(key, o)
+    }
+    // Also merge monitored orders in case
+    for (const o of orders) {
+      const key = `${String(o.po).trim()}*${String(o.item).trim()}`
+      if (!map.has(key)) map.set(key, o)
+    }
+    return map
+  }, [allOrdersPool, orders])
+
   // Scenario items mapped by `${po}*${item}`
   const itemMap = useMemo(() => {
     const map = new Map()
@@ -73,11 +94,14 @@ export default function Simulator() {
 
   // Filter orders according to criteria and sort by date
   const candidateOrders = useMemo(() => {
-    const list = orders.filter((o) => {
+    const list = allOrdersPool.filter((o) => {
       // 1. Plant filter (Requirement 1)
       if (plantFilter && String(o.div) !== String(plantFilter)) return false
       if (vendorFilter && o.vendor_code !== vendorFilter) return false
-      if (categoryFilter && String(o.category_id) !== categoryFilter) return false
+      if (categoryFilter) {
+        const catId = o.category_id || lookups?.categoryByPrefix[o.prefix]?.id
+        if (String(catId) !== String(categoryFilter)) return false
+      }
       if (dateFilter && (!o.ship_date || o.ship_date < dateFilter)) return false
       if (search) {
         const q = search.toLowerCase()
@@ -104,21 +128,22 @@ export default function Simulator() {
     })
 
     return list
-  }, [orders, plantFilter, vendorFilter, categoryFilter, dateFilter, search, statusFilter, sortOrder, itemMap])
+  }, [allOrdersPool, plantFilter, vendorFilter, categoryFilter, dateFilter, search, statusFilter, sortOrder, itemMap, lookups])
 
   // Count summary
   const summary = useMemo(() => {
     let reallocatedCount = 0
     let reallocatedQty = 0
-    for (const o of orders) {
-      const key = `${String(o.po).trim()}*${String(o.item).trim()}`
-      if (itemMap.has(key)) {
-        reallocatedCount++
-        reallocatedQty += Number(o.bal_qty) || 0
+    for (const it of scenarioItems) {
+      reallocatedCount++
+      const key = `${String(it.po).trim()}*${String(it.item).trim()}`
+      const orig = orderLookupMap.get(key)
+      if (orig) {
+        reallocatedQty += Number(orig.bal_qty) || 0
       }
     }
     return { count: reallocatedCount, qty: reallocatedQty }
-  }, [orders, itemMap])
+  }, [scenarioItems, orderLookupMap])
 
   // Helper: auto-save scenario items to DB and DataContext
   const updateItems = async (newItems) => {
@@ -399,6 +424,7 @@ export default function Simulator() {
   }, [master.categories, master.capacities, orders, itemMap, lookups])
 
   // Export 3-sheet Excel with Plant and Category breakdown (Requirements 4 & 5)
+  // Uses orderLookupMap so ANY open order in the database (monitored or unclassified) has full details populated!
   const handleExportExcel = () => {
     if (!activeScenario) {
       alert('Please select an active scenario to export.')
@@ -414,37 +440,44 @@ export default function Simulator() {
 
     for (const it of scenarioItems) {
       const key = `${String(it.po).trim()}*${String(it.item).trim()}`
-      const orig = orders.find((o) => `${String(o.po).trim()}*${String(o.item).trim()}` === key)
+      const orig = orderLookupMap.get(key)
+
+      const plantName = orig?.division_name || (orig?.div ? lookups?.divisionByCode[orig.div] : '') || orig?.div || ''
+      const origVendorName = orig?.supplier_name || orig?.vendor_name || (orig?.vendor_code ? lookups?.vendorByCode[orig.vendor_code]?.vendor_name : '') || ''
+      const catName = orig?.category_name || (orig?.prefix ? lookups?.categoryByPrefix[orig.prefix]?.name : '') || 'Unclassified'
 
       cancelRows.push({
-        'Plant / Div': orig?.division_name || orig?.div || '',
+        'Div': orig?.div ?? '',
+        'Plant': plantName,
         'PO Nbr': it.po,
         'Itm': it.item,
         'Vendor Code': orig?.vendor_code || '',
-        'Vendor Name': orig?.supplier_name || '',
+        'Vendor Name': origVendorName,
         'Part Number': orig?.part_number || '',
         'Description': orig?.description || '',
-        'Category': orig?.category_name || '',
+        'Category': catName,
         'Original Ship Date': orig?.ship_date || '',
-        'Bal Qty': orig?.bal_qty || 0,
+        'Bal Qty': orig?.bal_qty != null ? Number(orig.bal_qty) : 0,
         'Buyer': orig?.buyer || '',
         'Job Ref': orig?.job_reference || '',
       })
 
       const targetVendorName = lookups?.vendorByCode[it.new_vendor]?.vendor_name || it.new_vendor
       resourceRows.push({
-        'Plant / Div': orig?.division_name || orig?.div || '',
+        'Div': orig?.div ?? '',
+        'Plant': plantName,
         'Original PO': it.po,
         'Original Itm': it.item,
-        'Original Vendor': orig?.supplier_name || orig?.vendor_code || '',
+        'Original Vendor Code': orig?.vendor_code || '',
+        'Original Vendor Name': origVendorName,
         'New Vendor Code': it.new_vendor,
         'New Vendor Name': targetVendorName,
         'Part Number': orig?.part_number || '',
         'Description': orig?.description || '',
-        'Category': orig?.category_name || '',
+        'Category': catName,
         'Original Ship Date': orig?.ship_date || '',
         'New Ship Date': it.new_ship_date || orig?.ship_date || '',
-        'Order Qty': orig?.bal_qty || 0,
+        'Order Qty': orig?.bal_qty != null ? Number(orig.bal_qty) : 0,
         'Buyer': orig?.buyer || '',
         'Job Ref': orig?.job_reference || '',
       })
@@ -876,6 +909,8 @@ export default function Simulator() {
                     const key = `${String(o.po).trim()}*${String(o.item).trim()}`
                     const isSelected = selectedKeys.has(key)
                     const reallocated = itemMap.get(key)
+                    const catName = o.category_name || (o.prefix ? lookups?.categoryByPrefix[o.prefix]?.name : '') || 'Unclassified'
+                    const plantName = o.division_name || (o.div ? lookups?.divisionByCode[o.div] : '') || o.div
 
                     return (
                       <tr
@@ -899,15 +934,17 @@ export default function Simulator() {
                         {/* Plant / Division column */}
                         <td className="td font-medium text-xs text-slate-700">
                           <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-800 font-semibold" title={`Division ${o.div}`}>
-                            {o.division_name || o.div}
+                            {plantName}
                           </span>
                         </td>
                         <td className="td font-mono font-semibold text-xs">
                           {o.po}*{o.item}
                         </td>
                         <td className="td text-xs">
-                          <span className="px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-medium">
-                            {o.category_name}
+                          <span className={`px-2 py-0.5 rounded font-medium ${
+                            catName === 'Unclassified' ? 'bg-slate-100 text-slate-600' : 'bg-indigo-50 text-indigo-700'
+                          }`}>
+                            {catName}
                           </span>
                         </td>
                         <td className="td">
@@ -916,11 +953,11 @@ export default function Simulator() {
                             {o.description}
                           </div>
                         </td>
-                        <td className="td text-xs truncate max-w-44" title={o.supplier_name}>
-                          {o.supplier_name}
+                        <td className="td text-xs truncate max-w-44" title={o.supplier_name || o.vendor_name}>
+                          {o.supplier_name || o.vendor_name}
                         </td>
                         <td className="td text-right font-semibold text-sm">
-                          {fmtNum(o.bal_qty)} <span className="text-[10px] text-slate-400 font-normal">{o.unit}</span>
+                          {fmtNum(o.bal_qty)} <span className="text-[10px] text-slate-400 font-normal">{o.unit || 'pcs'}</span>
                         </td>
                         <td className="td text-xs font-medium text-slate-700">
                           {fmtDate(o.ship_date)}
@@ -937,7 +974,7 @@ export default function Simulator() {
                               handleReallocateOne(o.po, o.item, e.target.value, reallocated?.new_ship_date || o.ship_date)
                             }
                           >
-                            <option value="">-- Keep Current ({o.supplier_name.slice(0, 16)}...) --</option>
+                            <option value="">-- Keep Current ({(o.supplier_name || o.vendor_name || '').slice(0, 16)}...) --</option>
                             {targetVendorOptions.map((v) => (
                               <option key={v.vendor_code} value={v.vendor_code}>
                                 {v.vendor_name} ({v.vendor_code})

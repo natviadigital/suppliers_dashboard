@@ -23,6 +23,23 @@ export async function loadCurrentUpload() {
 }
 
 /**
+ * Loads raw open orders (paginated), optional filter by vendor_codes or IDs.
+ * Used by Simulator to ensure all orders (even unclassified prefixes) are visible.
+ */
+export async function loadRawOpenOrders(filter = {}) {
+  return fetchAll(() => {
+    let q = supabase
+      .from('open_orders')
+      .select('id, line_id, div, class, buyer, vendor_code, vendor_name, po, item, part_number, prefix, description, po_date, ship_date, delivery_date, ord_qty, bal_qty, unit_price, ext_price, line_confirmed, remarks, job_reference, po_status')
+      .order('id')
+    if (filter.vendor_codes && filter.vendor_codes.length) {
+      q = q.in('vendor_code', filter.vendor_codes)
+    }
+    return q
+  })
+}
+
+/**
  * Replaces the current open order with `rows`.
  * Inserts into a new "pending" upload, then swaps atomically via commit_upload().
  */
@@ -68,10 +85,15 @@ export async function loadScenarios() {
   }
 }
 
+/**
+ * Loads ALL scenario items for a scenario using fetchAll to bypass 1000 row limit
+ */
 export async function loadScenarioItems(scenarioId) {
   try {
-    const { data, error } = await supabase.from('scenario_items').select('*').eq('scenario_id', scenarioId)
-    if (!error && data) return data
+    const data = await fetchAll(() =>
+      supabase.from('scenario_items').select('*').eq('scenario_id', scenarioId).order('created_at')
+    )
+    if (data && data.length) return data
   } catch {}
   // local fallback
   try {

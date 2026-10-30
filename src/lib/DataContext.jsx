@@ -1,11 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import { loadCurrentUpload, loadMaster, loadMonitoredOrders, loadScenarios, loadScenarioItems } from './api'
+import { loadCurrentUpload, loadMaster, loadMonitoredOrders, loadRawOpenOrders, loadScenarios, loadScenarioItems } from './api'
 
 const DataContext = createContext(null)
 
 export function DataProvider({ children }) {
   const [master, setMaster] = useState(null)
   const [orders, setOrders] = useState([])
+  const [rawOrders, setRawOrders] = useState([]) // all orders (for simulator & action plan)
   const [upload, setUpload] = useState(null)
   const [scenarios, setScenarios] = useState([])
   const [activeScenarioId, setActiveScenarioId] = useState(null)
@@ -16,8 +17,14 @@ export function DataProvider({ children }) {
 
   const reloadMaster = useCallback(async () => setMaster(await loadMaster()), [])
   const reloadOrders = useCallback(async () => {
-    const [o, u] = await Promise.all([loadMonitoredOrders(), loadCurrentUpload()])
-    setOrders(o); setUpload(u)
+    const [o, raw, u] = await Promise.all([
+      loadMonitoredOrders(),
+      loadRawOpenOrders(),
+      loadCurrentUpload(),
+    ])
+    setOrders(o)
+    setRawOrders(raw)
+    setUpload(u)
   }, [])
   const reloadScenarios = useCallback(async () => {
     const sc = await loadScenarios()
@@ -58,7 +65,8 @@ export function DataProvider({ children }) {
     const vendorByCode = Object.fromEntries(master.vendors.map((v) => [v.vendor_code, v]))
     const categoryById = Object.fromEntries(master.categories.map((c) => [c.id, c]))
     const categoryByPrefix = Object.fromEntries(master.prefixes.map((p) => [p.prefix, categoryById[p.category_id]]))
-    return { vendorByCode, categoryById, categoryByPrefix }
+    const divisionByCode = Object.fromEntries(master.divisions.map((d) => [d.code, d.name]))
+    return { vendorByCode, categoryById, categoryByPrefix, divisionByCode }
   }, [master])
 
   // Active scenario map: key `${po}_${item}` -> item
@@ -99,7 +107,8 @@ export function DataProvider({ children }) {
   const value = {
     master,
     lookups,
-    orders, // raw actual orders
+    orders, // monitored orders (for capacity dashboard)
+    rawOrders, // all orders (for simulator & full action plan)
     simulatedOrders, // orders with simulation applied (or actual if inactive)
     upload,
     scenarios,
