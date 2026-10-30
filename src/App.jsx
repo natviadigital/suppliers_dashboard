@@ -1,14 +1,26 @@
 import { useEffect, useState } from 'react'
-import { BarChart3, ListOrdered, Table2, Upload as UploadIcon, Settings as SettingsIcon, RefreshCw, AlertTriangle, Loader2 } from 'lucide-react'
+import {
+  BarChart3,
+  ListOrdered,
+  Table2,
+  Upload as UploadIcon,
+  Settings as SettingsIcon,
+  RefreshCw,
+  AlertTriangle,
+  Loader2,
+  Sparkles,
+} from 'lucide-react'
 import { useData } from './lib/DataContext'
 import Dashboard from './pages/Dashboard'
 import OpenOrders from './pages/OpenOrders'
 import MotherTable from './pages/MotherTable'
 import UploadPage from './pages/Upload'
 import Settings from './pages/Settings'
+import Simulator from './pages/Simulator'
 
 const PAGES = [
   { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
+  { id: 'simulator', label: 'Simulator (2027+)', icon: Sparkles, badge: 'New' },
   { id: 'orders', label: 'Open Orders', icon: ListOrdered },
   { id: 'mother', label: 'Mother Table', icon: Table2 },
   { id: 'upload', label: 'Upload Open Order', icon: UploadIcon },
@@ -23,7 +35,7 @@ const pageFromHash = () => {
 export const EMPTY_FILTERS = { division: '', supplier: '', category: '', buyer: '' }
 
 export default function App() {
-  const { loading, error, upload, reloadAll } = useData()
+  const { loading, error, upload, reloadAll, simulationActive, activeScenario } = useData()
   const [page, setPage] = useState(pageFromHash)
   const [filters, setFilters] = useState(EMPTY_FILTERS)
 
@@ -41,12 +53,31 @@ export default function App() {
         <div className="px-5 py-5 border-b border-slate-800">
           <div className="text-white font-bold leading-tight">Supplier Capacity</div>
           <div className="text-xs text-slate-400">Insulation Purchasing</div>
+          {simulationActive && activeScenario && (
+            <div className="mt-2 text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 inline-flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+              Simulating: {activeScenario.name.slice(0, 15)}...
+            </div>
+          )}
         </div>
         <nav className="flex-1 p-3 space-y-1">
-          {PAGES.map(({ id, label, icon: Icon }) => (
+          {PAGES.map(({ id, label, icon: Icon, badge }) => (
             <button key={id} onClick={() => go(id)}
-              className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition cursor-pointer ${page === id ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800 hover:text-white'}`}>
-              <Icon size={18} /> {label}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition cursor-pointer ${
+                page === id
+                  ? id === 'simulator'
+                    ? 'bg-amber-600 text-white font-medium'
+                    : 'bg-indigo-600 text-white'
+                  : 'hover:bg-slate-800 hover:text-white'
+              }`}>
+              <span className="flex items-center gap-3">
+                <Icon size={18} /> {label}
+              </span>
+              {badge && (
+                <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-amber-400 text-slate-900 uppercase">
+                  {badge}
+                </span>
+              )}
             </button>
           ))}
         </nav>
@@ -78,6 +109,7 @@ export default function App() {
         ) : !error && (
           <>
             {page === 'dashboard' && <Dashboard filters={filters} setFilters={setFilters} />}
+            {page === 'simulator' && <Simulator />}
             {page === 'orders' && <OpenOrders filters={filters} setFilters={setFilters} />}
             {page === 'mother' && <MotherTable />}
             {page === 'upload' && <UploadPage onDone={() => go('dashboard')} />}

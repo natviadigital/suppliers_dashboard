@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, Legend, CartesianGrid, Brush } from 'recharts'
-import { AlertTriangle, Boxes, ClipboardList, Clock, Factory } from 'lucide-react'
+import { AlertTriangle, Boxes, ClipboardList, Clock, Factory, Sparkles, Eye, EyeOff } from 'lucide-react'
 import { useData } from '../lib/DataContext'
 import FilterBar from '../components/FilterBar'
 import Modal from '../components/Modal'
@@ -15,12 +15,26 @@ const RANGES = {
 }
 
 export default function Dashboard({ filters, setFilters }) {
-  const { master, lookups, orders, upload } = useData()
+  const {
+    master,
+    lookups,
+    orders,
+    simulatedOrders,
+    upload,
+    activeScenario,
+    simulationActive,
+    setSimulationActive,
+    scenarioItems,
+  } = useData()
+
   const [mode, setMode] = useState('week')
   const [range, setRange] = useState({ week: 26, month: 12 })
   const [selectedCat, setSelectedCat] = useState(null)
   const [drill, setDrill] = useState(null)
   const today = todayISO()
+
+  // Use simulated orders if simulation is toggled ON, otherwise actual orders
+  const effectiveOrders = simulationActive ? simulatedOrders : orders
 
   const buckets = useMemo(() => {
     const all = buildBuckets(mode, today)
@@ -28,7 +42,7 @@ export default function Dashboard({ filters, setFilters }) {
     return n ? all.slice(0, n + 1) : all
   }, [mode, range, today])
 
-  const filtered = useMemo(() => applyFilters(orders, filters, { skipCategory: true }), [orders, filters])
+  const filtered = useMemo(() => applyFilters(effectiveOrders, filters, { skipCategory: true }), [effectiveOrders, filters])
 
   const categories = useMemo(() =>
     master.categories.filter((c) => !filters.category || String(c.id) === filters.category), [master, filters.category])
@@ -75,9 +89,59 @@ export default function Dashboard({ filters, setFilters }) {
 
   return (
     <div className="p-6 space-y-5">
+      {/* Simulation Banner & Toggle */}
+      {activeScenario && (
+        <div className={`p-4 rounded-xl border flex flex-wrap items-center justify-between gap-4 transition-all ${
+          simulationActive
+            ? 'bg-amber-50 border-amber-300 text-amber-900 shadow-sm'
+            : 'bg-slate-100 border-slate-200 text-slate-700'
+        }`}>
+          <div className="flex items-center gap-3">
+            <span className={`p-2 rounded-lg ${simulationActive ? 'bg-amber-200 text-amber-900' : 'bg-slate-200 text-slate-600'}`}>
+              <Sparkles size={20} />
+            </span>
+            <div>
+              <div className="font-semibold flex items-center gap-2">
+                Simulation Scenario: <span className="underline">{activeScenario.name}</span>
+                <span className="text-xs px-2 py-0.5 rounded-full bg-white font-mono border border-current">
+                  {scenarioItems.length} lines reallocated
+                </span>
+              </div>
+              <div className="text-xs opacity-80">
+                {simulationActive
+                  ? 'Showing simulated capacity load with re-sourced orders.'
+                  : 'Showing actual load (Simulation is turned OFF).'}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <a href="#/simulator" className="text-xs font-semibold text-indigo-700 hover:underline">
+              Edit in Simulator →
+            </a>
+            <button
+              onClick={() => setSimulationActive(!simulationActive)}
+              className={`btn px-4 py-2 font-medium rounded-lg text-sm transition flex items-center gap-2 cursor-pointer ${
+                simulationActive
+                  ? 'bg-amber-600 hover:bg-amber-700 text-white shadow'
+                  : 'bg-white hover:bg-slate-50 text-slate-800 border border-slate-300'
+              }`}
+            >
+              {simulationActive ? <><EyeOff size={16} /> Turn Off Simulator</> : <><Eye size={16} /> Preview Simulator</>}
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Supplier Capacity Dashboard</h1>
+          <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
+            Supplier Capacity Dashboard
+            {simulationActive && (
+              <span className="text-xs uppercase px-2.5 py-1 rounded bg-amber-500 text-white font-bold tracking-wider">
+                Simulated
+              </span>
+            )}
+          </h1>
           <p className="text-sm text-slate-500">Open balance (BAL QTY) by ship date vs. weekly supplier capacity</p>
         </div>
         <div className="flex items-center gap-2">

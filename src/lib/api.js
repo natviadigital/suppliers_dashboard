@@ -50,3 +50,89 @@ export async function replaceOpenOrder(fileName, rows, newVendors, onProgress = 
 export const insertRow = async (table, row) => unwrap(await supabase.from(table).insert(row).select().single())
 export const updateRow = async (table, match, patch) => unwrap(await supabase.from(table).update(patch).match(match))
 export const deleteRow = async (table, match) => unwrap(await supabase.from(table).delete().match(match))
+
+// ---- Scenarios API (with local fallback if Supabase migration is pending) ----
+const LS_SCENARIOS = 'vtc_scenarios_fallback'
+const LS_ITEMS = 'vtc_scenario_items_fallback'
+
+export async function loadScenarios() {
+  try {
+    const { data, error } = await supabase.from('scenarios').select('*').order('updated_at', { ascending: false })
+    if (!error && data) return data
+  } catch {}
+  // local fallback
+  try {
+    return JSON.parse(localStorage.getItem(LS_SCENARIOS) || '[]')
+  } catch {
+    return []
+  }
+}
+
+export async function loadScenarioItems(scenarioId) {
+  try {
+    const { data, error } = await supabase.from('scenario_items').select('*').eq('scenario_id', scenarioId)
+    if (!error && data) return data
+  } catch {}
+  // local fallback
+  try {
+    const all = JSON.parse(localStorage.getItem(LS_ITEMS) || '[]')
+    return all.filter((it) => it.scenario_id === scenarioId)
+  } catch {
+    return []
+  }
+}
+
+export async function createScenario(name, description = '') {
+  try {
+    const row = unwrap(await supabase.from('scenarios').insert({ name, description }).select().single())
+    return row
+  } catch {
+    const list = JSON.parse(localStorage.getItem(LS_SCENARIOS) || '[]')
+    const row = { id: crypto.randomUUID(), name, description, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+    list.unshift(row)
+    localStorage.setItem(LS_SCENARIOS, JSON.stringify(list))
+    return row
+  }
+}
+
+export async function updateScenario(id, patch) {
+  try {
+    return unwrap(await supabase.from('scenarios').update({ ...patch, updated_at: new Date().toISOString() }).eq('id', id).select().single())
+  } catch {
+    const list = JSON.parse(localStorage.getItem(LS_SCENARIOS) || '[]')
+    const idx = list.findIndex((s) => s.id === id)
+    if (idx >= 0) {
+      list[idx] = { ...list[idx], ...patch, updated_at: new Date().toISOString() }
+      localStorage.setItem(LS_SCENARIOS, JSON.stringify(list))
+      return list[idx]
+    }
+  }
+}
+
+export async function deleteScenario(id) {
+  try {
+    unwrap(await supabase.from('scenarios').delete().eq('id', id))
+  } catch {
+    const list = JSON.parse(localStorage.getItem(LS_SCENARIOS) || '[]')
+    localStorage.setItem(LS_SCENARIOS, JSON.stringify(list.filter((s) => s.id !== id)))
+    const items = JSON.parse(localStorage.getItem(LS_ITEMS) || '[]')
+    localStorage.setItem(LS_ITEMS, JSON.stringify(items.filter((it) => it.scenario_id !== id)))
+  }
+}
+
+export async function saveScenarioItems(scenarioId, items) {
+  try {
+    // Delete existing and insert new
+    await supabase.from('scenario_items').delete().eq('scenario_id', scenarioId)
+    if (items.length) {
+      const CHUNK = 500
+      for (let i = 0; i < items.length; i += CHUNK) {
+        unwrap(await supabase.from('scenario_items').insert(items.slice(i, i + CHUNK)))
+      }
+    }
+    await supabase.from('scenarios').update({ updated_at: new Date().toISOString() }).eq('id', scenarioId)
+  } catch {
+    const all = JSON.parse(localStorage.getItem(LS_ITEMS) || '[]').filter((it) => it.scenario_id !== scenarioId)
+    localStorage.setItem(LS_ITEMS, JSON.stringify([...all, ...items]))
+  }
+}
