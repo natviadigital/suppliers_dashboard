@@ -1,5 +1,5 @@
 import { useMemo, useState, useRef, useEffect } from 'react'
-import { ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, Legend, CartesianGrid, Brush } from 'recharts'
+import { ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, Legend, CartesianGrid, Brush, ReferenceArea } from 'recharts'
 import {
   AlertTriangle,
   Boxes,
@@ -15,6 +15,7 @@ import {
   FileSpreadsheet,
   Layers,
   Loader2,
+  CalendarOff,
 } from 'lucide-react'
 import { useData } from '../lib/DataContext'
 import FilterBar from '../components/FilterBar'
@@ -43,6 +44,8 @@ export default function Dashboard({ filters, setFilters }) {
     simulationActive,
     setSimulationActive,
     scenarioItems,
+    holidays,
+    holidayLookup,
   } = useData()
 
   const [mode, setMode] = useState('week')
@@ -84,18 +87,19 @@ export default function Dashboard({ filters, setFilters }) {
   // Aggregate every visible category
   const aggs = useMemo(() => Object.fromEntries(categories.map((c) => [c.id, aggregateCategory({
     category: c, orders: filtered, capacities: master.capacities, vendorByCode: lookups.vendorByCode,
-    buckets, mode, supplierFilter: filters.supplier, today,
-  })])), [categories, filtered, master, lookups, buckets, mode, filters.supplier, today])
+    buckets, mode, supplierFilter: filters.supplier, today, holidayLookup,
+  })])), [categories, filtered, master, lookups, buckets, mode, filters.supplier, today, holidayLookup])
 
   // Next-4-weeks snapshot per category (independent of view mode)
   const next4 = useMemo(() => {
     const wk = buildBuckets('week', today).slice(1, 5)
     return Object.fromEntries(categories.map((c) => {
-      const a = aggregateCategory({ category: c, orders: filtered, capacities: master.capacities, vendorByCode: lookups.vendorByCode, buckets: wk, mode: 'week', supplierFilter: filters.supplier, today })
+      const a = aggregateCategory({ category: c, orders: filtered, capacities: master.capacities, vendorByCode: lookups.vendorByCode, buckets: wk, mode: 'week', supplierFilter: filters.supplier, today, holidayLookup })
       const load = wk.reduce((s, b) => s + (a.totals[b.key] ?? 0), 0)
-      return [c.id, { load, cap: a.weeklyCapTotal * 4 }]
+      const cap = wk.reduce((s, b) => s + (a.bucketCapTotals?.[b.key] ?? a.weeklyCapTotal), 0)
+      return [c.id, { load, cap }]
     }))
-  }, [categories, filtered, master, lookups, filters.supplier, today])
+  }, [categories, filtered, master, lookups, filters.supplier, today, holidayLookup])
 
   const activeCat = categories.find((c) => c.id === selectedCat)
     ?? categories.find((c) => aggs[c.id]?.totalOpen > 0) ?? categories[0]
@@ -469,10 +473,36 @@ function Kpi({ icon: Icon, label, value, tone, hint }) {
 }
 
 function CategoryDetail({ category, agg, buckets, mode, onCell, onExportCategory }) {
-  const { suppliers, chartData, totals, weeklyCapTotal, demand } = agg
+  const { suppliers, chartData, totals, bucketCapTotals, weeklyCapTotal, demand } = agg
   const unit = category.unit
   const periodWord = mode === 'week' ? 'week' : 'month'
   const withLoad = suppliers.filter((s) => s.total > 0)
+
+  // Collect blocked holiday weeks visible in the current range for suppliers in this category
+  const activeHolidaysInRange = useMemo(() => {
+    const map = new Map()
+    for (const s of suppliers) {
+      for (const b of buckets) {
+        const hol = s.holidays?.[b.key]
+        if (!hol) continue
+        const list = Array.isArray(hol) ? hol : [hol]
+        for (const h of list) {
+          const k = `${s.code}_${h.id}`
+          if (!map.has(k)) {
+            map.set(k, {
+              ...h,
+              supplierName: s.name,
+              weeks: [],
+            })
+          }
+          if (mode === 'week') {
+            map.get(k).weeks.push(`${b.label} (${b.sub})`)
+          }
+        }
+      }
+    }
+    return [...map.values()]
+  }, [suppliers, buckets, mode])
 
   return (
     <div className="card">
@@ -498,6 +528,30 @@ function CategoryDetail({ category, agg, buckets, mode, onCell, onExportCategory
         </div>
       </div>
 
+      {/* Blocked Holiday Weeks Banner */}
+      {activeHolidaysInRange.length > 0 && (
+        <div className="mx-5 mt-4 p-3 rounded-lg bg-rose-50/80 border border-rose-200 text-xs text-rose-900 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1 font-bold text-rose-700 uppercase tracking-wider">
+              <CalendarOff size={14} /> Blocked Holiday Weeks:
+            </span>
+            {activeHolidaysInRange.map((h) => (
+              <span
+                key={`${h.vendor_code}_${h.id}`}
+                className="px-2 py-0.5 rounded bg-white border border-rose-200 text-rose-800 font-medium shadow-2xs"
+                title={`${h.supplierName}: ${h.holiday_name} (${h.start_date} to ${h.end_date} · ${h.total_days} days)`}
+              >
+                <b>{h.holiday_name}</b> ({h.start_date.slice(5)} to {h.end_date.slice(5)})
+                {h.weeks.length > 0 && <span className="text-rose-600 font-mono ml-1">[{h.weeks.join(', ')}]</span>}
+              </span>
+            ))}
+          </div>
+          <a href="#/settings" className="text-rose-700 font-semibold hover:underline shrink-0">
+            Manage Holidays →
+          </a>
+        </div>
+      )}
+
       <div className="p-5">
         {withLoad.length === 0 ? (
           <div className="text-center text-slate-500 py-12">No open orders for this category with the current filters.</div>
@@ -512,7 +566,7 @@ function CategoryDetail({ category, agg, buckets, mode, onCell, onExportCategory
               {withLoad.map((s) => (
                 <Bar key={s.code} dataKey={s.code} name={s.name} stackId="load" fill={s.color} maxBarSize={48} />
               ))}
-              {weeklyCapTotal > 0 && <Line dataKey="capacity" name="Total capacity" type="stepAfter" stroke="#0f172a" strokeWidth={2} dot={false} connectNulls />}
+              {weeklyCapTotal > 0 && <Line dataKey="capacity" name="Effective capacity (excl. holidays)" type="stepAfter" stroke="#0f172a" strokeWidth={2} dot={false} connectNulls />}
               {demand > 0 && <Line dataKey="demand" name="Demand" type="stepAfter" stroke="#a855f7" strokeWidth={2} strokeDasharray="6 4" dot={false} connectNulls />}
               {chartData.length > 30 && <Brush dataKey="label" height={22} stroke="#6366f1" travellerWidth={8} />}
             </ComposedChart>
@@ -553,13 +607,52 @@ function CategoryDetail({ category, agg, buckets, mode, onCell, onExportCategory
                   <td className="td text-right font-semibold border-r border-slate-200">{fmtNum(s.total)}</td>
                   {buckets.map((b) => {
                     const v = s.cells[b.key] ?? 0
-                    const cap = (s.weeklyCap ?? 0) * b.capacityFactor
-                    const lvl = b.key === PAST_DUE ? (v ? 'red' : 'empty') : utilLevel(v, cap)
+                    const hol = s.holidays?.[b.key]
+                    const isBlockedWeek = mode === 'week' && Boolean(hol)
+                    const cap = s.bucketCaps?.[b.key] ?? ((s.weeklyCap ?? 0) * b.capacityFactor)
+                    const lvl = b.key === PAST_DUE
+                      ? (v ? 'red' : 'empty')
+                      : isBlockedWeek
+                        ? (v > 0 ? 'red' : 'holiday')
+                        : utilLevel(v, cap)
+
+                    const holLabel = hol
+                      ? (Array.isArray(hol)
+                          ? hol.map((h) => `${h.holiday_name} (${h.start_date} to ${h.end_date} · ${h.total_days}d)`).join(', ')
+                          : `${hol.holiday_name} (${hol.start_date} to ${hol.end_date} · ${hol.total_days} days)`)
+                      : ''
+
+                    const cellTitle = [
+                      s.name,
+                      `${b.label} ${b.sub}`,
+                      holLabel ? `🚫 BLOCKED HOLIDAY: ${holLabel}` : null,
+                      v ? `Load: ${fmtNum(v)} ${unit}` : (isBlockedWeek ? 'Load: 0 (Blocked Week)' : null),
+                      isBlockedWeek ? 'Available Capacity: 0 (Holiday Blocked)' : (cap ? `Capacity: ${fmtNum(cap)}\nUtilization: ${pct(v, cap)}` : null),
+                    ].filter(Boolean).join('\n')
+
+                    const cellClass = lvl === 'holiday'
+                      ? 'bg-rose-50/90 text-rose-700 border-rose-100'
+                      : LEVEL_STYLES[lvl].cell
+
                     return (
                       <td key={b.key} onClick={() => v && onCell(s, b)}
-                        title={v ? `${s.name}\n${b.label} ${b.sub}\nLoad: ${fmtNum(v)} ${unit}${cap ? `\nCapacity: ${fmtNum(cap)}\nUtilization: ${pct(v, cap)}` : ''}` : ''}
-                        className={`td text-center border-l border-white ${LEVEL_STYLES[lvl].cell} ${v ? 'cursor-pointer hover:ring-2 hover:ring-indigo-400 hover:ring-inset' : ''}`}>
-                        {v ? <><div>{fmtCompact(v)}</div>{cap > 0 && b.key !== PAST_DUE && <div className="text-[10px] opacity-70">{pct(v, cap)}</div>}</> : '·'}
+                        title={cellTitle}
+                        style={lvl === 'holiday' ? { backgroundImage: 'repeating-linear-gradient(-45deg, rgba(244,63,94,0.06), rgba(244,63,94,0.06) 4px, rgba(255,228,230,0.45) 4px, rgba(255,228,230,0.45) 8px)' } : undefined}
+                        className={`td text-center border-l border-white ${cellClass} ${v ? 'cursor-pointer hover:ring-2 hover:ring-indigo-400 hover:ring-inset' : ''}`}>
+                        {v ? (
+                          <>
+                            <div>{fmtCompact(v)}</div>
+                            {isBlockedWeek ? (
+                              <div className="text-[9px] font-bold uppercase text-rose-800 bg-rose-100/80 rounded px-1 inline-block">HOL</div>
+                            ) : (
+                              cap > 0 && b.key !== PAST_DUE && <div className="text-[10px] opacity-70">{pct(v, cap)}</div>
+                            )}
+                          </>
+                        ) : isBlockedWeek ? (
+                          <span className="text-[10px] font-bold uppercase tracking-tighter text-rose-600 px-1 py-0.5 rounded bg-white/80 border border-rose-200">
+                            HOL
+                          </span>
+                        ) : '·'}
                       </td>
                     )
                   })}
@@ -573,7 +666,7 @@ function CategoryDetail({ category, agg, buckets, mode, onCell, onExportCategory
                 <td className="td text-right bg-slate-50 border-r border-slate-200">{fmtNum(agg.totalOpen)}</td>
                 {buckets.map((b) => {
                   const v = totals[b.key] ?? 0
-                  const cap = weeklyCapTotal * b.capacityFactor
+                  const cap = bucketCapTotals?.[b.key] ?? (weeklyCapTotal * b.capacityFactor)
                   const lvl = b.key === PAST_DUE ? (v ? 'red' : 'empty') : utilLevel(v, cap)
                   return <td key={b.key} className={`td text-center border-l border-white ${LEVEL_STYLES[lvl].cell}`}>{v ? fmtCompact(v) : '·'}{cap > 0 && v > 0 && b.key !== PAST_DUE && <div className="text-[10px] opacity-70">{pct(v, cap)}</div>}</td>
                 })}
@@ -604,8 +697,12 @@ const Stat = ({ label, value }) => (
 function Legend2() {
   const items = [['green', '< 80%'], ['yellow', '80 – 100%'], ['red', '> 100% / Past due'], ['nocap', 'No capacity defined']]
   return (
-    <div className="flex flex-wrap gap-3 text-xs text-slate-600">
+    <div className="flex flex-wrap gap-3 text-xs text-slate-600 items-center">
       {items.map(([k, l]) => <span key={k} className="flex items-center gap-1"><span className={`w-3 h-3 rounded-sm ${LEVEL_STYLES[k].dot}`} />{l}</span>)}
+      <span className="flex items-center gap-1">
+        <span className="px-1 py-0.2 text-[9px] font-bold rounded bg-rose-50 text-rose-700 border border-rose-300">HOL</span>
+        Blocked Holiday (0 cap)
+      </span>
       <span className="text-slate-400">· click a cell to see PO lines</span>
     </div>
   )
@@ -616,8 +713,18 @@ function ChartTooltip({ active, payload, label, suppliers, unit }) {
   const row = payload[0].payload
   const bars = suppliers.filter((s) => row[s.code]).sort((a, b) => row[b.code] - row[a.code])
   return (
-    <div className="card p-3 text-xs shadow-lg min-w-56">
+    <div className="card p-3 text-xs shadow-lg min-w-60">
       <div className="font-semibold text-slate-800 mb-1">{label} <span className="font-normal text-slate-400">{row.sub}</span></div>
+      {row.holidays?.length > 0 && (
+        <div className="mb-2 p-1.5 rounded bg-rose-50 border border-rose-200 text-rose-800 space-y-0.5">
+          {row.holidays.map((h, i) => (
+            <div key={i} className="font-medium leading-tight">
+              🚫 <b>{h.holiday_name}</b> ({h.start_date} – {h.end_date} · {h.total_days}d)
+              <div className="text-[10px] text-rose-600">{h.supplierName}: Week Blocked (0 cap)</div>
+            </div>
+          ))}
+        </div>
+      )}
       {bars.map((s) => (
         <div key={s.code} className="flex justify-between gap-4">
           <span className="flex items-center gap-1 truncate max-w-48"><span className="w-2 h-2 rounded-sm" style={{ background: s.color }} />{s.name}</span>
@@ -625,7 +732,7 @@ function ChartTooltip({ active, payload, label, suppliers, unit }) {
         </div>
       ))}
       <div className="border-t border-slate-200 mt-1 pt-1 flex justify-between font-semibold"><span>Total</span><span>{fmtNum(row.total)} {unit}</span></div>
-      {row.capacity != null && <div className="flex justify-between"><span>Capacity</span><span>{fmtNum(row.capacity)} · {pct(row.total, row.capacity)}</span></div>}
+      {row.capacity != null && <div className="flex justify-between"><span>Effective Capacity</span><span>{fmtNum(row.capacity)} · {pct(row.total, row.capacity)}</span></div>}
       {row.demand != null && <div className="flex justify-between text-purple-700"><span>Demand</span><span>{fmtNum(row.demand)}</span></div>}
     </div>
   )

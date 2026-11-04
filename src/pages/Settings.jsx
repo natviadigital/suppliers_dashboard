@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Plus, Save, Trash2, Search, Loader2 } from 'lucide-react'
+import { Plus, Save, Trash2, Search, Loader2, CalendarOff, RotateCcw } from 'lucide-react'
 import { useData } from '../lib/DataContext'
 import { insertRow, updateRow, deleteRow, loadPrefixSummary } from '../lib/api'
 import { fmtNum } from '../lib/format'
+import { DEFAULT_SUPPLIER_HOLIDAYS, formatHolidayWeeks } from '../lib/holidays'
 
 const TABS = [
   ['capacity', 'Supplier Capacity'],
+  ['holidays', 'Supplier Holidays'],
   ['prefixes', 'Prefixes'],
   ['categories', 'Categories'],
   ['vendors', 'Vendors'],
@@ -48,6 +50,7 @@ export default function Settings() {
       </div>
       {action.error && <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-800 text-sm">{action.error}</div>}
       {tab === 'capacity' && <CapacityTab action={action} />}
+      {tab === 'holidays' && <HolidaysTab />}
       {tab === 'prefixes' && <PrefixesTab action={action} />}
       {tab === 'categories' && <CategoriesTab action={action} />}
       {tab === 'vendors' && <VendorsTab action={action} />}
@@ -57,6 +60,213 @@ export default function Settings() {
 
 const numOrNull = (v) => (v === '' || v === null || v === undefined ? null : Number(v))
 const confirmDelete = (what) => window.confirm(`Delete ${what}? This cannot be undone.`)
+
+// ---------------------------------------------------------------- Supplier Holidays
+function HolidaysTab() {
+  const { master, lookups, holidays, updateHolidays } = useData()
+  const [vendorFilter, setVendorFilter] = useState('')
+  const [draft, setDraft] = useState({
+    vendor_code: '12123',
+    holiday_name: '',
+    start_date: '',
+    end_date: '',
+    total_days: '',
+  })
+
+  const filteredHolidays = useMemo(() => {
+    return (holidays || [])
+      .filter((h) => !vendorFilter || h.vendor_code === vendorFilter)
+      .sort((a, b) => (a.start_date || '').localeCompare(b.start_date || ''))
+  }, [holidays, vendorFilter])
+
+  const handleAdd = () => {
+    if (!draft.vendor_code || !draft.holiday_name.trim() || !draft.start_date) return
+    const end = draft.end_date || draft.start_date
+    const d1 = new Date(draft.start_date + 'T00:00:00')
+    const d2 = new Date(end + 'T00:00:00')
+    const calcDays = Math.max(1, Math.round((d2 - d1) / 86400000) + 1)
+    const newHoliday = {
+      id: `hol-${Date.now()}`,
+      vendor_code: draft.vendor_code,
+      holiday_name: draft.holiday_name.trim(),
+      start_date: draft.start_date,
+      end_date: end,
+      total_days: Number(draft.total_days) || calcDays,
+    }
+    updateHolidays([...(holidays || []), newHoliday])
+    setDraft({ ...draft, holiday_name: '', start_date: '', end_date: '', total_days: '' })
+  }
+
+  const handleRemove = (id) => {
+    if (!confirmDelete('this holiday period')) return
+    updateHolidays((holidays || []).filter((h) => h.id !== id))
+  }
+
+  const handleResetDefaults = () => {
+    if (!window.confirm('Restore default Liaoning XD 2027 holiday schedule?')) return
+    updateHolidays(DEFAULT_SUPPLIER_HOLIDAYS)
+  }
+
+  return (
+    <div className="card">
+      <div className="p-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="p-2 rounded-lg bg-rose-50 text-rose-600">
+            <CalendarOff size={20} />
+          </div>
+          <div>
+            <h3 className="font-semibold text-slate-900">Supplier Holiday &amp; Blackout Weeks</h3>
+            <p className="text-xs text-slate-500">
+              Weeks overlapped by a supplier holiday are blocked (0 weekly capacity) on the Dashboard chart and heatmap.
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <select
+            className="input w-64 text-xs"
+            value={vendorFilter}
+            onChange={(e) => setVendorFilter(e.target.value)}
+          >
+            <option value="">All Suppliers ({holidays?.length || 0} holidays)</option>
+            {master.vendors
+              .filter((v) => !v.is_interplant)
+              .map((v) => (
+                <option key={v.vendor_code} value={v.vendor_code}>
+                  {v.vendor_name} ({v.vendor_code})
+                </option>
+              ))}
+          </select>
+          <button
+            type="button"
+            onClick={handleResetDefaults}
+            className="btn-outline text-xs px-2.5 py-1.5 flex items-center gap-1 cursor-pointer"
+            title="Restore default Liaoning 2027 holidays"
+          >
+            <RotateCcw size={13} /> Restore Defaults
+          </button>
+        </div>
+      </div>
+
+      <table className="w-full">
+        <thead>
+          <tr>
+            <th className="th">Supplier</th>
+            <th className="th">Holiday Name</th>
+            <th className="th">Start Date</th>
+            <th className="th">End Date</th>
+            <th className="th text-center">Total Days</th>
+            <th className="th">Blocked ISO Week(s)</th>
+            <th className="th w-20" />
+          </tr>
+        </thead>
+        <tbody>
+          {filteredHolidays.map((h) => {
+            const wks = formatHolidayWeeks(h.start_date, h.end_date)
+            const vName = lookups.vendorByCode[h.vendor_code]?.vendor_name || h.vendor_code
+            return (
+              <tr key={h.id}>
+                <td className="td">
+                  <div className="font-medium text-slate-800 text-xs">{vName}</div>
+                  <div className="font-mono text-[11px] text-slate-400">{h.vendor_code}</div>
+                </td>
+                <td className="td font-semibold text-slate-900">{h.holiday_name}</td>
+                <td className="td font-mono text-xs">{h.start_date}</td>
+                <td className="td font-mono text-xs">{h.end_date}</td>
+                <td className="td text-center font-mono text-xs">{h.total_days} days</td>
+                <td className="td">
+                  <div className="flex flex-wrap gap-1">
+                    {wks.map((w) => (
+                      <span
+                        key={w.monday}
+                        className="px-2 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 font-mono text-xs font-semibold"
+                        title={`Monday ${w.monday}`}
+                      >
+                        {w.year}-{w.label} ({w.monday.slice(5)})
+                      </span>
+                    ))}
+                  </div>
+                </td>
+                <td className="td text-right">
+                  <button
+                    type="button"
+                    className="btn-danger p-1.5"
+                    title="Delete holiday"
+                    onClick={() => handleRemove(h.id)}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </td>
+              </tr>
+            )
+          })}
+          <tr className="bg-slate-50">
+            <td className="td">
+              <select
+                className="input text-xs"
+                value={draft.vendor_code}
+                onChange={(e) => setDraft({ ...draft, vendor_code: e.target.value })}
+              >
+                <option value="">Select supplier…</option>
+                {master.vendors
+                  .filter((v) => !v.is_interplant)
+                  .map((v) => (
+                    <option key={v.vendor_code} value={v.vendor_code}>
+                      {v.vendor_name} ({v.vendor_code})
+                    </option>
+                  ))}
+              </select>
+            </td>
+            <td className="td">
+              <input
+                className="input text-xs"
+                placeholder="e.g. Spring Festival"
+                value={draft.holiday_name}
+                onChange={(e) => setDraft({ ...draft, holiday_name: e.target.value })}
+              />
+            </td>
+            <td className="td">
+              <input
+                type="date"
+                className="input text-xs font-mono"
+                value={draft.start_date}
+                onChange={(e) => setDraft({ ...draft, start_date: e.target.value, end_date: draft.end_date || e.target.value })}
+              />
+            </td>
+            <td className="td">
+              <input
+                type="date"
+                className="input text-xs font-mono"
+                value={draft.end_date}
+                onChange={(e) => setDraft({ ...draft, end_date: e.target.value })}
+              />
+            </td>
+            <td className="td">
+              <input
+                type="number"
+                min="1"
+                className="input text-xs text-center"
+                placeholder="Auto"
+                value={draft.total_days}
+                onChange={(e) => setDraft({ ...draft, total_days: e.target.value })}
+              />
+            </td>
+            <td className="td text-xs text-slate-400">Auto-calculated from dates</td>
+            <td className="td text-right">
+              <button
+                type="button"
+                className="btn-primary text-xs"
+                disabled={!draft.vendor_code || !draft.holiday_name.trim() || !draft.start_date}
+                onClick={handleAdd}
+              >
+                <Plus size={15} /> Add
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  )
+}
 
 // ---------------------------------------------------------------- Capacity
 function CapacityTab({ action }) {

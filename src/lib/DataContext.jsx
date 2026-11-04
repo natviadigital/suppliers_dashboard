@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { loadCurrentUpload, loadMaster, loadMonitoredOrders, loadRawOpenOrders, loadScenarios, loadScenarioItems } from './api'
+import { loadSupplierHolidays, saveSupplierHolidays, buildHolidayLookup } from './holidays'
 
 const DataContext = createContext(null)
 
@@ -12,8 +13,16 @@ export function DataProvider({ children }) {
   const [activeScenarioId, setActiveScenarioId] = useState(null)
   const [scenarioItems, setScenarioItems] = useState([])
   const [simulationActive, setSimulationActive] = useState(false)
+  const [holidays, setHolidays] = useState(() => loadSupplierHolidays())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+
+  const updateHolidays = useCallback((nextHolidays) => {
+    setHolidays(nextHolidays)
+    saveSupplierHolidays(nextHolidays)
+  }, [])
+
+  const holidayLookup = useMemo(() => buildHolidayLookup(holidays), [holidays])
 
   const reloadMaster = useCallback(async () => setMaster(await loadMaster()), [])
   const reloadOrders = useCallback(async () => {
@@ -120,6 +129,9 @@ export function DataProvider({ children }) {
     scenarioItemMap,
     simulationActive,
     setSimulationActive,
+    holidays,
+    holidayLookup,
+    updateHolidays,
     loading,
     error,
     reloadAll,
