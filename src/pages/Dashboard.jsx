@@ -478,6 +478,35 @@ function CategoryDetail({ category, agg, buckets, mode, onCell, onExportCategory
   const periodWord = mode === 'week' ? 'week' : 'month'
   const withLoad = suppliers.filter((s) => s.total > 0)
 
+  // Time buckets excluding PAST_DUE for period averaging
+  const timeBuckets = useMemo(() => buckets.filter((b) => b.key !== PAST_DUE), [buckets])
+
+  // Selected index range [startIdx, endIdx] inside timeBuckets for the Average column
+  const [avgRange, setAvgRange] = useState([0, Math.max(0, timeBuckets.length - 1)])
+
+  // Reset range when buckets/mode change
+  useEffect(() => {
+    setAvgRange([0, Math.max(0, timeBuckets.length - 1)])
+  }, [timeBuckets.length, mode])
+
+  const startIdx = Math.max(0, Math.min(avgRange[0] ?? 0, Math.max(0, timeBuckets.length - 1)))
+  const endIdx = Math.max(startIdx, Math.min(avgRange[1] ?? Math.max(0, timeBuckets.length - 1), Math.max(0, timeBuckets.length - 1)))
+
+  const selectedTimeBuckets = useMemo(
+    () => timeBuckets.slice(startIdx, endIdx + 1),
+    [timeBuckets, startIdx, endIdx]
+  )
+  const selectedKeySet = useMemo(
+    () => new Set(selectedTimeBuckets.map((b) => b.key)),
+    [selectedTimeBuckets]
+  )
+  const avgPeriodCount = Math.max(1, selectedTimeBuckets.length)
+  const firstSelBucket = selectedTimeBuckets[0]
+  const lastSelBucket = selectedTimeBuckets[selectedTimeBuckets.length - 1]
+  const rangeSummaryLabel = firstSelBucket && lastSelBucket
+    ? `${firstSelBucket.label} – ${lastSelBucket.label} (${avgPeriodCount}${mode === 'week' ? 'w' : 'm'})`
+    : `${avgPeriodCount} ${periodWord}s`
+
   // Collect blocked holiday weeks visible in the current range for suppliers in this category
   const activeHolidaysInRange = useMemo(() => {
     const map = new Map()
@@ -504,6 +533,19 @@ function CategoryDetail({ category, agg, buckets, mode, onCell, onExportCategory
     return [...map.values()]
   }, [suppliers, buckets, mode])
 
+  // Total average across all suppliers in selected range
+  const totalSelectedSum = useMemo(
+    () => selectedTimeBuckets.reduce((sum, b) => sum + (totals[b.key] ?? 0), 0),
+    [selectedTimeBuckets, totals]
+  )
+  const totalSelectedCapSum = useMemo(
+    () => selectedTimeBuckets.reduce((sum, b) => sum + (bucketCapTotals?.[b.key] ?? (weeklyCapTotal * b.capacityFactor)), 0),
+    [selectedTimeBuckets, bucketCapTotals, weeklyCapTotal]
+  )
+  const totalAvgLoad = totalSelectedSum / avgPeriodCount
+  const totalAvgCap = totalSelectedCapSum / avgPeriodCount
+  const totalAvgLvl = utilLevel(totalAvgLoad, totalAvgCap)
+
   return (
     <div className="card">
       <div className="p-5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-4">
@@ -514,6 +556,7 @@ function CategoryDetail({ category, agg, buckets, mode, onCell, onExportCategory
         <div className="flex flex-wrap items-center gap-6 text-sm">
           <Stat label="Total weekly capacity" value={weeklyCapTotal ? fmtNum(weeklyCapTotal) : 'Not defined'} />
           <Stat label="Weekly demand" value={demand ? fmtNum(demand) : 'Not defined'} />
+          <Stat label={`Avg / ${periodWord} (${rangeSummaryLabel})`} value={fmtNum(Math.round(totalAvgLoad))} />
           <Stat label="Open balance" value={fmtNum(agg.totalOpen)} />
           {onExportCategory && (
             <button
@@ -568,7 +611,22 @@ function CategoryDetail({ category, agg, buckets, mode, onCell, onExportCategory
               ))}
               {weeklyCapTotal > 0 && <Line dataKey="capacity" name="Effective capacity (excl. holidays)" type="stepAfter" stroke="#0f172a" strokeWidth={2} dot={false} connectNulls />}
               {demand > 0 && <Line dataKey="demand" name="Demand" type="stepAfter" stroke="#a855f7" strokeWidth={2} strokeDasharray="6 4" dot={false} connectNulls />}
-              {chartData.length > 30 && <Brush dataKey="label" height={22} stroke="#6366f1" travellerWidth={8} />}
+              <Brush
+                dataKey="label"
+                height={22}
+                stroke="#6366f1"
+                fill="#eef2ff"
+                travellerWidth={9}
+                startIndex={startIdx + 1}
+                endIndex={endIdx + 1}
+                onChange={(e) => {
+                  if (e && typeof e.startIndex === 'number' && typeof e.endIndex === 'number') {
+                    const s = Math.max(0, e.startIndex - 1)
+                    const end = Math.max(s, Math.min(timeBuckets.length - 1, e.endIndex - 1))
+                    setAvgRange([s, end])
+                  }
+                }}
+              />
             </ComposedChart>
           </ResponsiveContainer>
         )}
@@ -580,102 +638,183 @@ function CategoryDetail({ category, agg, buckets, mode, onCell, onExportCategory
           <h3 className="font-semibold text-slate-800 text-sm">Supplier load heatmap</h3>
           <Legend2 />
         </div>
+
+        {/* Interactive Brush-Style Period Range Selector for Average Calculation */}
+        {timeBuckets.length > 0 && (
+          <PeriodRangeBrush
+            timeBuckets={timeBuckets}
+            totals={totals}
+            startIdx={startIdx}
+            endIdx={endIdx}
+            onChange={setAvgRange}
+            mode={mode}
+          />
+        )}
+
         <div className="overflow-x-auto pb-2">
           <table className="text-xs border-separate border-spacing-0">
             <thead>
               <tr>
                 <th className="th sticky left-0 z-10 min-w-56">Supplier</th>
                 <th className="th text-right">Cap / {periodWord}</th>
-                <th className="th text-right border-r border-slate-200">Open total</th>
-                {buckets.map((b) => (
-                  <th key={b.key} className={`th text-center min-w-16 ${b.key === PAST_DUE ? 'bg-red-50 text-red-700' : ''}`}>
-                    <div>{b.label}</div><div className="font-normal normal-case text-slate-400">{b.sub}</div>
-                  </th>
-                ))}
+                <th className="th text-right">Open total</th>
+                <th
+                  className="th text-center min-w-24 bg-indigo-50/90 text-indigo-900 border-x border-indigo-200"
+                  title={`Average load per ${periodWord} across selected range: ${firstSelBucket?.label ?? ''} (${firstSelBucket?.sub ?? ''}) to ${lastSelBucket?.label ?? ''} (${lastSelBucket?.sub ?? ''}) · ${avgPeriodCount} ${periodWord}s`}
+                >
+                  <div>Avg / {periodWord}</div>
+                  <div className="font-mono text-[10px] font-semibold text-indigo-600 normal-case">
+                    {rangeSummaryLabel}
+                  </div>
+                </th>
+                {buckets.map((b) => {
+                  const inAvg = selectedKeySet.has(b.key)
+                  return (
+                    <th
+                      key={b.key}
+                      className={`th text-center min-w-16 ${
+                        b.key === PAST_DUE
+                          ? 'bg-red-50 text-red-700'
+                          : inAvg
+                            ? 'border-t-2 border-t-indigo-500 bg-indigo-50/35'
+                            : 'opacity-60'
+                      }`}
+                    >
+                      <div>{b.label}</div>
+                      <div className="font-normal normal-case text-slate-400">{b.sub}</div>
+                    </th>
+                  )
+                })}
               </tr>
             </thead>
             <tbody>
-              {suppliers.map((s) => (
-                <tr key={s.code} className="group">
-                  <td className="td sticky left-0 z-10 bg-white group-hover:bg-slate-50 max-w-64">
-                    <div className="flex items-center gap-2">
-                      <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: s.color }} />
-                      <span className="truncate" title={`${s.name} (${s.code})`}>{s.name}</span>
-                    </div>
-                  </td>
-                  <td className="td text-right text-slate-600">{s.weeklyCap ? fmtNum(s.weeklyCap) : <span className="text-slate-400">—</span>}</td>
-                  <td className="td text-right font-semibold border-r border-slate-200">{fmtNum(s.total)}</td>
-                  {buckets.map((b) => {
-                    const v = s.cells[b.key] ?? 0
-                    const hol = s.holidays?.[b.key]
-                    const isBlockedWeek = mode === 'week' && Boolean(hol)
-                    const cap = s.bucketCaps?.[b.key] ?? ((s.weeklyCap ?? 0) * b.capacityFactor)
-                    const lvl = b.key === PAST_DUE
-                      ? (v ? 'red' : 'empty')
-                      : isBlockedWeek
-                        ? (v > 0 ? 'red' : 'holiday')
-                        : utilLevel(v, cap)
+              {suppliers.map((s) => {
+                const rangeSum = selectedTimeBuckets.reduce((sum, b) => sum + (s.cells[b.key] ?? 0), 0)
+                const avgLoad = rangeSum / avgPeriodCount
+                const rangeCapSum = selectedTimeBuckets.reduce(
+                  (sum, b) => sum + (s.bucketCaps?.[b.key] ?? ((s.weeklyCap ?? 0) * b.capacityFactor)),
+                  0
+                )
+                const avgCap = rangeCapSum / avgPeriodCount
+                const avgLvl = utilLevel(avgLoad, avgCap)
 
-                    const holLabel = hol
-                      ? (Array.isArray(hol)
-                          ? hol.map((h) => `${h.holiday_name} (${h.start_date} to ${h.end_date} · ${h.total_days}d)`).join(', ')
-                          : `${hol.holiday_name} (${hol.start_date} to ${hol.end_date} · ${hol.total_days} days)`)
-                      : ''
+                return (
+                  <tr key={s.code} className="group">
+                    <td className="td sticky left-0 z-10 bg-white group-hover:bg-slate-50 max-w-64">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: s.color }} />
+                        <span className="truncate" title={`${s.name} (${s.code})`}>{s.name}</span>
+                      </div>
+                    </td>
+                    <td className="td text-right text-slate-600">{s.weeklyCap ? fmtNum(s.weeklyCap) : <span className="text-slate-400">—</span>}</td>
+                    <td className="td text-right font-semibold">{fmtNum(s.total)}</td>
+                    <td
+                      className={`td text-center font-semibold border-x border-indigo-200 ${
+                        avgLoad > 0 ? LEVEL_STYLES[avgLvl].cell : 'bg-indigo-50/30 text-slate-400'
+                      }`}
+                      title={[
+                        `${s.name} — Average (${rangeSummaryLabel})`,
+                        `Period: ${firstSelBucket?.label ?? ''} (${firstSelBucket?.sub ?? ''}) to ${lastSelBucket?.label ?? ''} (${lastSelBucket?.sub ?? ''})`,
+                        `Total in range: ${fmtNum(rangeSum)} ${unit} across ${avgPeriodCount} ${periodWord}s`,
+                        `Average load: ${fmtNum(Math.round(avgLoad))} ${unit}/${periodWord}`,
+                        avgCap ? `Avg Effective Capacity: ${fmtNum(Math.round(avgCap))} ${unit}/${periodWord} (${pct(avgLoad, avgCap)})` : null,
+                      ].filter(Boolean).join('\n')}
+                    >
+                      {avgLoad > 0 ? (
+                        <>
+                          <div>{fmtCompact(avgLoad)}</div>
+                          {avgCap > 0 && <div className="text-[10px] opacity-75">{pct(avgLoad, avgCap)}</div>}
+                        </>
+                      ) : '·'}
+                    </td>
+                    {buckets.map((b) => {
+                      const v = s.cells[b.key] ?? 0
+                      const hol = s.holidays?.[b.key]
+                      const isBlockedWeek = mode === 'week' && Boolean(hol)
+                      const cap = s.bucketCaps?.[b.key] ?? ((s.weeklyCap ?? 0) * b.capacityFactor)
+                      const lvl = b.key === PAST_DUE
+                        ? (v ? 'red' : 'empty')
+                        : isBlockedWeek
+                          ? (v > 0 ? 'red' : 'holiday')
+                          : utilLevel(v, cap)
 
-                    const cellTitle = [
-                      s.name,
-                      `${b.label} ${b.sub}`,
-                      holLabel ? `🚫 BLOCKED HOLIDAY: ${holLabel}` : null,
-                      v ? `Load: ${fmtNum(v)} ${unit}` : (isBlockedWeek ? 'Load: 0 (Blocked Week)' : null),
-                      isBlockedWeek ? 'Available Capacity: 0 (Holiday Blocked)' : (cap ? `Capacity: ${fmtNum(cap)}\nUtilization: ${pct(v, cap)}` : null),
-                    ].filter(Boolean).join('\n')
+                      const holLabel = hol
+                        ? (Array.isArray(hol)
+                            ? hol.map((h) => `${h.holiday_name} (${h.start_date} to ${h.end_date} · ${h.total_days}d)`).join(', ')
+                            : `${hol.holiday_name} (${hol.start_date} to ${hol.end_date} · ${hol.total_days} days)`)
+                        : ''
 
-                    const cellClass = lvl === 'holiday'
-                      ? 'bg-rose-50/90 text-rose-700 border-rose-100'
-                      : LEVEL_STYLES[lvl].cell
+                      const cellTitle = [
+                        s.name,
+                        `${b.label} ${b.sub}`,
+                        holLabel ? `🚫 BLOCKED HOLIDAY: ${holLabel}` : null,
+                        v ? `Load: ${fmtNum(v)} ${unit}` : (isBlockedWeek ? 'Load: 0 (Blocked Week)' : null),
+                        isBlockedWeek ? 'Available Capacity: 0 (Holiday Blocked)' : (cap ? `Capacity: ${fmtNum(cap)}\nUtilization: ${pct(v, cap)}` : null),
+                      ].filter(Boolean).join('\n')
 
-                    return (
-                      <td key={b.key} onClick={() => v && onCell(s, b)}
-                        title={cellTitle}
-                        style={lvl === 'holiday' ? { backgroundImage: 'repeating-linear-gradient(-45deg, rgba(244,63,94,0.06), rgba(244,63,94,0.06) 4px, rgba(255,228,230,0.45) 4px, rgba(255,228,230,0.45) 8px)' } : undefined}
-                        className={`td text-center border-l border-white ${cellClass} ${v ? 'cursor-pointer hover:ring-2 hover:ring-indigo-400 hover:ring-inset' : ''}`}>
-                        {v ? (
-                          <>
-                            <div>{fmtCompact(v)}</div>
-                            {isBlockedWeek ? (
-                              <div className="text-[9px] font-bold uppercase text-rose-800 bg-rose-100/80 rounded px-1 inline-block">HOL</div>
-                            ) : (
-                              cap > 0 && b.key !== PAST_DUE && <div className="text-[10px] opacity-70">{pct(v, cap)}</div>
-                            )}
-                          </>
-                        ) : isBlockedWeek ? (
-                          <span className="text-[10px] font-bold uppercase tracking-tighter text-rose-600 px-1 py-0.5 rounded bg-white/80 border border-rose-200">
-                            HOL
-                          </span>
-                        ) : '·'}
-                      </td>
-                    )
-                  })}
-                </tr>
-              ))}
+                      const cellClass = lvl === 'holiday'
+                        ? 'bg-rose-50/90 text-rose-700 border-rose-100'
+                        : LEVEL_STYLES[lvl].cell
+                      const inAvg = b.key === PAST_DUE || selectedKeySet.has(b.key)
+
+                      return (
+                        <td key={b.key} onClick={() => v && onCell(s, b)}
+                          title={cellTitle}
+                          style={lvl === 'holiday' ? { backgroundImage: 'repeating-linear-gradient(-45deg, rgba(244,63,94,0.06), rgba(244,63,94,0.06) 4px, rgba(255,228,230,0.45) 4px, rgba(255,228,230,0.45) 8px)' } : undefined}
+                          className={`td text-center border-l border-white ${cellClass} ${!inAvg ? 'opacity-50' : ''} ${v ? 'cursor-pointer hover:ring-2 hover:ring-indigo-400 hover:ring-inset' : ''}`}>
+                          {v ? (
+                            <>
+                              <div>{fmtCompact(v)}</div>
+                              {isBlockedWeek ? (
+                                <div className="text-[9px] font-bold uppercase text-rose-800 bg-rose-100/80 rounded px-1 inline-block">HOL</div>
+                              ) : (
+                                cap > 0 && b.key !== PAST_DUE && <div className="text-[10px] opacity-70">{pct(v, cap)}</div>
+                              )}
+                            </>
+                          ) : isBlockedWeek ? (
+                            <span className="text-[10px] font-bold uppercase tracking-tighter text-rose-600 px-1 py-0.5 rounded bg-white/80 border border-rose-200">
+                              HOL
+                            </span>
+                          ) : '·'}
+                        </td>
+                      )
+                    })}
+                  </tr>
+                )
+              })}
             </tbody>
             <tfoot>
               <tr className="font-semibold">
                 <td className="td sticky left-0 z-10 bg-slate-50">Total load</td>
                 <td className="td text-right bg-slate-50">{weeklyCapTotal ? fmtNum(weeklyCapTotal) : '—'}</td>
-                <td className="td text-right bg-slate-50 border-r border-slate-200">{fmtNum(agg.totalOpen)}</td>
+                <td className="td text-right bg-slate-50">{fmtNum(agg.totalOpen)}</td>
+                <td
+                  className={`td text-center border-x border-indigo-200 ${
+                    totalAvgLoad > 0 ? LEVEL_STYLES[totalAvgLvl].cell : 'bg-indigo-50/40 text-slate-400'
+                  }`}
+                  title={`Total Average Load (${rangeSummaryLabel}): ${fmtNum(Math.round(totalAvgLoad))} ${unit}/${periodWord}${totalAvgCap ? `\nAvg Effective Capacity: ${fmtNum(Math.round(totalAvgCap))} (${pct(totalAvgLoad, totalAvgCap)})` : ''}`}
+                >
+                  {totalAvgLoad > 0 ? fmtCompact(totalAvgLoad) : '·'}
+                  {totalAvgCap > 0 && totalAvgLoad > 0 && (
+                    <div className="text-[10px] opacity-75">{pct(totalAvgLoad, totalAvgCap)}</div>
+                  )}
+                </td>
                 {buckets.map((b) => {
                   const v = totals[b.key] ?? 0
                   const cap = bucketCapTotals?.[b.key] ?? (weeklyCapTotal * b.capacityFactor)
                   const lvl = b.key === PAST_DUE ? (v ? 'red' : 'empty') : utilLevel(v, cap)
-                  return <td key={b.key} className={`td text-center border-l border-white ${LEVEL_STYLES[lvl].cell}`}>{v ? fmtCompact(v) : '·'}{cap > 0 && v > 0 && b.key !== PAST_DUE && <div className="text-[10px] opacity-70">{pct(v, cap)}</div>}</td>
+                  const inAvg = b.key === PAST_DUE || selectedKeySet.has(b.key)
+                  return <td key={b.key} className={`td text-center border-l border-white ${LEVEL_STYLES[lvl].cell} ${!inAvg ? 'opacity-50' : ''}`}>{v ? fmtCompact(v) : '·'}{cap > 0 && v > 0 && b.key !== PAST_DUE && <div className="text-[10px] opacity-70">{pct(v, cap)}</div>}</td>
                 })}
               </tr>
               {demand > 0 && (
                 <tr>
                   <td className="td sticky left-0 z-10 bg-white text-purple-700">Demand</td>
                   <td className="td text-right text-purple-700">{fmtNum(demand)}</td>
-                  <td className="td border-r border-slate-200" />
+                  <td className="td" />
+                  <td className="td text-center text-purple-700 font-semibold bg-purple-50/40 border-x border-indigo-200">
+                    {fmtCompact(demand * (selectedTimeBuckets[0]?.capacityFactor ?? 1))}
+                  </td>
                   {buckets.map((b) => {
                     const d = demand * b.capacityFactor; const v = totals[b.key] ?? 0
                     return <td key={b.key} className="td text-center text-purple-700" title={d ? `Load vs demand: ${pct(v, d)}` : ''}>{d ? fmtCompact(d) : ''}</td>
@@ -693,6 +832,218 @@ function CategoryDetail({ category, agg, buckets, mode, onCell, onExportCategory
 const Stat = ({ label, value }) => (
   <div><div className="text-xs text-slate-500">{label}</div><div className="font-semibold text-slate-900">{value}</div></div>
 )
+
+function PeriodRangeBrush({ timeBuckets, totals, startIdx, endIdx, onChange, mode }) {
+  const trackRef = useRef(null)
+  const dragRef = useRef(null)
+  const n = timeBuckets.length
+  const periodLabel = mode === 'week' ? 'weeks' : 'months'
+
+  const maxTotal = useMemo(() => {
+    let m = 1
+    for (const b of timeBuckets) {
+      const v = totals[b.key] ?? 0
+      if (v > m) m = v
+    }
+    return m
+  }, [timeBuckets, totals])
+
+  const startDrag = (e, type) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const rect = trackRef.current?.getBoundingClientRect()
+    if (!rect) return
+    dragRef.current = {
+      type,
+      initX: e.clientX,
+      initStart: startIdx,
+      initEnd: endIdx,
+      width: rect.width,
+      left: rect.left,
+    }
+
+    const onMove = (ev) => {
+      const d = dragRef.current
+      if (!d) return
+      if (d.type === 'left') {
+        const rel = Math.max(0, Math.min(1, (ev.clientX - d.left) / d.width))
+        const nextStart = Math.min(d.initEnd, Math.max(0, Math.floor(rel * n)))
+        onChange([nextStart, d.initEnd])
+      } else if (d.type === 'right') {
+        const rel = Math.max(0, Math.min(1, (ev.clientX - d.left) / d.width))
+        const nextEnd = Math.max(d.initStart, Math.min(n - 1, Math.floor(rel * n)))
+        onChange([d.initStart, nextEnd])
+      } else if (d.type === 'pan') {
+        const deltaIdx = Math.round(((ev.clientX - d.initX) / d.width) * n)
+        const span = d.initEnd - d.initStart
+        let nextStart = d.initStart + deltaIdx
+        if (nextStart < 0) nextStart = 0
+        if (nextStart + span > n - 1) nextStart = Math.max(0, n - 1 - span)
+        onChange([nextStart, nextStart + span])
+      }
+    }
+
+    const onUp = () => {
+      dragRef.current = null
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
+
+  const handleTrackClick = (e) => {
+    if (dragRef.current) return
+    const rect = trackRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const rel = Math.max(0, Math.min(0.999, (e.clientX - rect.left) / rect.width))
+    const clickedIdx = Math.floor(rel * n)
+    if (clickedIdx < startIdx) {
+      onChange([clickedIdx, endIdx])
+    } else if (clickedIdx > endIdx) {
+      onChange([startIdx, clickedIdx])
+    }
+  }
+
+  const leftPct = (startIdx / n) * 100
+  const widthPct = ((endIdx - startIdx + 1) / n) * 100
+  const bStart = timeBuckets[startIdx]
+  const bEnd = timeBuckets[endIdx]
+  const count = endIdx - startIdx + 1
+
+  const presets = mode === 'week'
+    ? [
+        [4, 'Next 4W'],
+        [8, 'Next 8W'],
+        [12, 'Next 12W'],
+        [26, 'Next 26W'],
+        [n, 'All'],
+      ]
+    : [
+        [3, 'Next 3M'],
+        [6, 'Next 6M'],
+        [12, 'Next 12M'],
+        [n, 'All'],
+      ]
+
+  return (
+    <div className="px-5 pb-3 pt-1 bg-slate-50/70 border-b border-slate-200 space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-semibold text-slate-700">Average Period Selector:</span>
+          <span className="px-2 py-0.5 rounded bg-indigo-100 text-indigo-800 font-semibold font-mono">
+            {bStart?.label} ({bStart?.sub}) &rarr; {bEnd?.label} ({bEnd?.sub}) · {count} {periodLabel}
+          </span>
+          <div className="flex items-center gap-1 text-slate-500 ml-1">
+            <span>From:</span>
+            <select
+              className="border border-slate-300 rounded px-1.5 py-0.5 bg-white text-slate-700 font-mono text-[11px]"
+              value={startIdx}
+              onChange={(e) => {
+                const v = Number(e.target.value)
+                onChange([v, Math.max(v, endIdx)])
+              }}
+            >
+              {timeBuckets.map((b, i) => (
+                <option key={b.key} value={i}>
+                  {b.label} ({b.sub})
+                </option>
+              ))}
+            </select>
+            <span>To:</span>
+            <select
+              className="border border-slate-300 rounded px-1.5 py-0.5 bg-white text-slate-700 font-mono text-[11px]"
+              value={endIdx}
+              onChange={(e) => {
+                const v = Number(e.target.value)
+                onChange([Math.min(startIdx, v), v])
+              }}
+            >
+              {timeBuckets.map((b, i) => (
+                <option key={b.key} value={i}>
+                  {b.label} ({b.sub})
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1">
+          {presets
+            .filter(([len]) => len <= n)
+            .map(([len, lbl]) => {
+              const isActive = startIdx === 0 && endIdx === len - 1
+              return (
+                <button
+                  key={lbl}
+                  type="button"
+                  onClick={() => onChange([0, Math.min(n - 1, len - 1)])}
+                  className={`px-2 py-0.5 rounded text-[11px] font-medium cursor-pointer transition ${
+                    isActive
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-white border border-slate-300 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  {lbl}
+                </button>
+              )
+            })}
+        </div>
+      </div>
+
+      {/* Recharts-Brush-Style Draggable Range Bar */}
+      <div
+        ref={trackRef}
+        onClick={handleTrackClick}
+        className="relative h-7 w-full rounded bg-slate-200/70 border border-indigo-300 select-none overflow-hidden cursor-pointer"
+        title="Drag the purple handles or slide the highlighted window to choose which periods to average"
+      >
+        {/* Mini background sparkline bars */}
+        <div className="absolute inset-0 flex items-end px-0.5 gap-px pointer-events-none">
+          {timeBuckets.map((b, i) => {
+            const v = totals[b.key] ?? 0
+            const hPct = Math.max(v > 0 ? 12 : 0, Math.round((v / maxTotal) * 85))
+            const inside = i >= startIdx && i <= endIdx
+            return (
+              <div key={b.key} className="flex-1 h-full flex items-end">
+                <div
+                  className={`w-full rounded-t-[1px] ${inside ? 'bg-indigo-400/70' : 'bg-slate-400/35'}`}
+                  style={{ height: `${hPct}%` }}
+                />
+              </div>
+            )
+          })}
+        </div>
+
+        {/* Selected draggable window */}
+        <div
+          onPointerDown={(e) => startDrag(e, 'pan')}
+          style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+          className="absolute top-0 bottom-0 bg-indigo-500/20 border-y-2 border-indigo-600 cursor-grab active:cursor-grabbing flex items-center justify-between"
+        >
+          {/* Left Traveller Handle */}
+          <div
+            onPointerDown={(e) => startDrag(e, 'left')}
+            className="w-3 h-full bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center cursor-ew-resize shrink-0 shadow-xs"
+            title="Drag left handle"
+          >
+            <span className="text-[9px] font-bold leading-none">=</span>
+          </div>
+
+          {/* Right Traveller Handle */}
+          <div
+            onPointerDown={(e) => startDrag(e, 'right')}
+            className="w-3 h-full bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center cursor-ew-resize shrink-0 shadow-xs"
+            title="Drag right handle"
+          >
+            <span className="text-[9px] font-bold leading-none">=</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function Legend2() {
   const items = [['green', '< 80%'], ['yellow', '80 – 100%'], ['red', '> 100% / Past due'], ['nocap', 'No capacity defined']]
