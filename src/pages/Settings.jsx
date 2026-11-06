@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Plus, Save, Trash2, Search, Loader2, CalendarOff, RotateCcw } from 'lucide-react'
+import { Plus, Save, Trash2, Search, Loader2, CalendarOff, RotateCcw, CheckCircle2, Clock3 } from 'lucide-react'
 import { useData } from '../lib/DataContext'
 import { insertRow, updateRow, deleteRow, loadPrefixSummary } from '../lib/api'
 import { fmtNum } from '../lib/format'
 import { DEFAULT_SUPPLIER_HOLIDAYS, formatHolidayWeeks } from '../lib/holidays'
+import { resolveCapStatus } from '../lib/capStatusAndTdl'
 
 const TABS = [
   ['capacity', 'Supplier Capacity'],
@@ -270,7 +271,7 @@ function HolidaysTab() {
 
 // ---------------------------------------------------------------- Capacity
 function CapacityTab({ action }) {
-  const { master, lookups } = useData()
+  const { master, lookups, capStatusMap, toggleSupplierCapStatus } = useData()
   const [catId, setCatId] = useState(master.categories[0]?.id)
   const [newVendor, setNewVendor] = useState('')
   const [newCap, setNewCap] = useState('')
@@ -301,19 +302,37 @@ function CapacityTab({ action }) {
         </div>
       </div>
       <table className="w-full">
-        <thead><tr><th className="th">Vendor code</th><th className="th">Supplier</th><th className="th w-48">Weekly capacity ({cat?.unit})</th><th className="th w-28" /></tr></thead>
+        <thead><tr><th className="th">Vendor code</th><th className="th">Supplier</th><th className="th w-48">Weekly capacity ({cat?.unit})</th><th className="th text-center w-36">Cap status</th><th className="th w-28" /></tr></thead>
         <tbody>
-          {rows.map((r) => (
-            <EditRow key={r.id} row={r} fields={['weekly_capacity']}
-              onSave={(d) => action.run(() => updateRow('supplier_capacities', { id: r.id }, { weekly_capacity: numOrNull(d.weekly_capacity) }))}
-              onDelete={() => confirmDelete('this supplier from the category') && action.run(() => deleteRow('supplier_capacities', { id: r.id }))}>
-              {(d, set) => (<>
-                <td className="td font-mono text-xs">{r.vendor_code}</td>
-                <td className="td">{lookups.vendorByCode[r.vendor_code]?.vendor_name}</td>
-                <td className="td"><input type="number" step="any" min="0" className="input" value={d.weekly_capacity ?? ''} onChange={(e) => set('weekly_capacity', e.target.value)} placeholder="Not defined" /></td>
-              </>)}
-            </EditRow>
-          ))}
+          {rows.map((r) => {
+            const status = resolveCapStatus(capStatusMap, catId, r.vendor_code, r.weekly_capacity)
+            const isConfirmed = status === 'confirmed'
+            return (
+              <EditRow key={r.id} row={r} fields={['weekly_capacity']}
+                onSave={(d) => action.run(() => updateRow('supplier_capacities', { id: r.id }, { weekly_capacity: numOrNull(d.weekly_capacity) }))}
+                onDelete={() => confirmDelete('this supplier from the category') && action.run(() => deleteRow('supplier_capacities', { id: r.id }))}>
+                {(d, set) => (<>
+                  <td className="td font-mono text-xs">{r.vendor_code}</td>
+                  <td className="td">{lookups.vendorByCode[r.vendor_code]?.vendor_name}</td>
+                  <td className="td"><input type="number" step="any" min="0" className="input" value={d.weekly_capacity ?? ''} onChange={(e) => set('weekly_capacity', e.target.value)} placeholder="Not defined" /></td>
+                  <td className="td text-center">
+                    <button
+                      type="button"
+                      onClick={() => toggleSupplierCapStatus(catId, r.vendor_code, r.weekly_capacity)}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border transition cursor-pointer ${
+                        isConfirmed
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                          : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                      }`}
+                    >
+                      {isConfirmed ? <CheckCircle2 size={12} /> : <Clock3 size={12} />}
+                      {isConfirmed ? 'Confirmed' : 'Pending'}
+                    </button>
+                  </td>
+                </>)}
+              </EditRow>
+            )
+          })}
           <tr className="bg-slate-50">
             <td className="td" colSpan={2}>
               <select className="input" value={newVendor} onChange={(e) => setNewVendor(e.target.value)}>
@@ -322,6 +341,7 @@ function CapacityTab({ action }) {
               </select>
             </td>
             <td className="td"><input type="number" step="any" min="0" className="input" value={newCap} onChange={(e) => setNewCap(e.target.value)} placeholder="Weekly capacity" /></td>
+            <td className="td text-center text-xs text-slate-400">Auto</td>
             <td className="td"><button className="btn-primary" disabled={!newVendor || action.busy} onClick={add}><Plus size={16} /> Add</button></td>
           </tr>
         </tbody>

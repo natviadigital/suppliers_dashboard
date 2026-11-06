@@ -9,6 +9,7 @@ import {
   AlertTriangle,
   Loader2,
   Sparkles,
+  CheckSquare,
 } from 'lucide-react'
 import { useData } from './lib/DataContext'
 import Dashboard from './pages/Dashboard'
@@ -17,9 +18,11 @@ import MotherTable from './pages/MotherTable'
 import UploadPage from './pages/Upload'
 import Settings from './pages/Settings'
 import Simulator from './pages/Simulator'
+import TdlPage from './pages/TdlPage'
 
 const PAGES = [
   { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
+  { id: 'tdl', label: 'TDL · Actions', icon: CheckSquare, badge: 'TDL' },
   { id: 'simulator', label: 'Simulator (2027+)', icon: Sparkles, badge: 'New' },
   { id: 'orders', label: 'Open Orders', icon: ListOrdered },
   { id: 'mother', label: 'Mother Table', icon: Table2 },
@@ -109,6 +112,7 @@ export default function App() {
         ) : !error && (
           <>
             {page === 'dashboard' && <Dashboard filters={filters} setFilters={setFilters} />}
+            {page === 'tdl' && <TdlPage />}
             {page === 'simulator' && <Simulator />}
             {page === 'orders' && <OpenOrders filters={filters} setFilters={setFilters} />}
             {page === 'mother' && <MotherTable />}

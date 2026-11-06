@@ -16,8 +16,13 @@ import {
   Layers,
   Loader2,
   CalendarOff,
+  CheckCircle2,
+  Clock3,
+  CheckSquare,
 } from 'lucide-react'
 import { useData } from '../lib/DataContext'
+import { resolveCapStatus } from '../lib/capStatusAndTdl'
+import TdlPage from './TdlPage'
 import FilterBar from '../components/FilterBar'
 import Modal from '../components/Modal'
 import OrderLinesTable from '../components/OrderLinesTable'
@@ -46,6 +51,8 @@ export default function Dashboard({ filters, setFilters }) {
     scenarioItems,
     holidays,
     holidayLookup,
+    capStatusMap,
+    toggleSupplierCapStatus,
   } = useData()
 
   const [mode, setMode] = useState('week')
@@ -406,44 +413,85 @@ export default function Dashboard({ filters, setFilters }) {
         <Kpi icon={AlertTriangle} label="Over-capacity periods" value={fmtNum(kpis.over)} tone={kpis.over ? 'red' : null} hint="Supplier-periods above 100% in the selected range" />
       </div>
 
-      {/* Category cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5 gap-3">
-        {categories.map((c) => {
-          const a = aggs[c.id]; const n = next4[c.id]
-          const lvl = utilLevel(n.load, n.cap)
-          const p = n.cap ? Math.min(100, (n.load / n.cap) * 100) : 0
-          const isActive = activeCat?.id === c.id
-          return (
-            <button key={c.id} onClick={() => setSelectedCat(c.id)}
-              className={`card p-4 text-left transition cursor-pointer hover:shadow-md ${isActive ? 'ring-2 ring-indigo-500' : ''}`}>
-              <div className="flex items-start justify-between gap-2">
-                <div className="font-semibold text-slate-800 text-sm">{c.name}</div>
-                <span className={`w-2.5 h-2.5 mt-1 rounded-full ${LEVEL_STYLES[lvl].dot}`} />
-              </div>
-              <div className="mt-2 text-2xl font-bold text-slate-900">{fmtCompact(a.totalOpen)} <span className="text-xs font-normal text-slate-500">{c.unit} open</span></div>
-              <div className="mt-3 text-xs text-slate-500 flex justify-between">
-                <span>Next 4 weeks</span>
-                <span className={LEVEL_STYLES[lvl].text}>{n.cap ? `${fmtCompact(n.load)} / ${fmtCompact(n.cap)} · ${pct(n.load, n.cap)}` : `${fmtCompact(n.load)} · no capacity`}</span>
-              </div>
-              <div className="mt-1 h-1.5 rounded-full bg-slate-100 overflow-hidden">
-                <div className="h-full rounded-full" style={{ width: `${n.cap ? p : 0}%`, background: LEVEL_STYLES[lvl].bar }} />
-              </div>
-              {a.pastDue > 0 && <div className="mt-2 text-xs text-red-600">Past due: {fmtNum(a.pastDue)} {c.unit}</div>}
-            </button>
-          )
-        })}
+      {/* Compact Category Selector Menu */}
+      <div className="card p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2 px-1">
+          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-2">
+            <span>Select Category ({categories.length})</span>
+            <span className="font-normal normal-case text-slate-400">· click a category to display its summary &amp; capacity breakdown below</span>
+          </div>
+          <div className="flex items-center gap-3 text-[11px] text-slate-500">
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" /> &lt; 80% next 4w</span>
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" /> 80–100%</span>
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" /> &gt; 100%</span>
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-slate-400" /> No cap / 0 load</span>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {categories.map((c) => {
+            const a = aggs[c.id]
+            const n = next4[c.id]
+            const lvl = utilLevel(n.load, n.cap)
+            const isActive = activeCat?.id === c.id
+            return (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => setSelectedCat(c.id)}
+                title={`${c.name}\nOpen: ${fmtNum(a.totalOpen)} ${c.unit}\nNext 4w: ${n.cap ? `${fmtCompact(n.load)} / ${fmtCompact(n.cap)} (${pct(n.load, n.cap)})` : `${fmtCompact(n.load)} (no capacity)`}${a.pastDue > 0 ? `\nPast due: ${fmtNum(a.pastDue)} ${c.unit}` : ''}`}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-2 cursor-pointer border ${
+                  isActive
+                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs ring-2 ring-indigo-200'
+                    : 'bg-slate-50/80 hover:bg-white text-slate-700 border-slate-200 hover:border-slate-300 hover:shadow-2xs'
+                }`}
+              >
+                <span className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'ring-2 ring-white/80' : ''} ${LEVEL_STYLES[lvl].dot}`} />
+                <span className="font-semibold">{c.name}</span>
+                {a.totalOpen > 0 && (
+                  <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded ${
+                    isActive ? 'bg-indigo-700/80 text-indigo-100' : 'bg-slate-200/75 text-slate-600'
+                  }`}>
+                    {fmtCompact(a.totalOpen)}
+                  </span>
+                )}
+              </button>
+            )
+          })}
+        </div>
       </div>
 
       {activeCat && agg && (
         <CategoryDetail
           category={activeCat}
           agg={agg}
+          next4={next4[activeCat.id]}
           buckets={buckets}
           mode={mode}
+          capStatusMap={capStatusMap}
+          onToggleCapStatus={toggleSupplierCapStatus}
           onCell={(supplier, bucket) => setDrill({ supplier, bucket })}
           onExportCategory={() => handleExport('activeCat')}
         />
       )}
+
+      {/* TDL (Action & Status Tracker) Section on Dashboard */}
+      <div className="space-y-3 pt-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="p-1.5 rounded-lg bg-indigo-100 text-indigo-700">
+              <CheckSquare size={18} />
+            </span>
+            <div>
+              <h2 className="text-base font-bold text-slate-900">TDL · Action &amp; Status Tracker</h2>
+              <p className="text-xs text-slate-500">Monitor supplier capacity confirmations, PO reallocations, and follow-up actions</p>
+            </div>
+          </div>
+          <a href="#/tdl" className="text-xs font-semibold text-indigo-600 hover:underline">
+            Open Full TDL View →
+          </a>
+        </div>
+        <TdlPage compact />
+      </div>
 
       {drill && (
         <DrillDown
@@ -472,11 +520,21 @@ function Kpi({ icon: Icon, label, value, tone, hint }) {
   )
 }
 
-function CategoryDetail({ category, agg, buckets, mode, onCell, onExportCategory }) {
+function CategoryDetail({ category, agg, next4, buckets, mode, capStatusMap, onToggleCapStatus, onCell, onExportCategory }) {
   const { suppliers, chartData, totals, bucketCapTotals, weeklyCapTotal, demand } = agg
   const unit = category.unit
   const periodWord = mode === 'week' ? 'week' : 'month'
   const withLoad = suppliers.filter((s) => s.total > 0)
+
+  const n4Load = next4?.load ?? 0
+  const n4Cap = next4?.cap ?? 0
+  const n4Lvl = utilLevel(n4Load, n4Cap)
+  const n4PctWidth = n4Cap ? Math.min(100, (n4Load / n4Cap) * 100) : 0
+
+  const confirmedCount = useMemo(
+    () => suppliers.filter((s) => resolveCapStatus(capStatusMap, category.id, s.code, s.weeklyCap) === 'confirmed').length,
+    [suppliers, capStatusMap, category.id]
+  )
 
   // Time buckets excluding PAST_DUE for period averaging
   const timeBuckets = useMemo(() => buckets.filter((b) => b.key !== PAST_DUE), [buckets])
@@ -549,15 +607,14 @@ function CategoryDetail({ category, agg, buckets, mode, onCell, onExportCategory
   return (
     <div className="card">
       <div className="p-5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-semibold text-slate-900">{category.name}</h2>
-          <p className="text-sm text-slate-500">Load per {periodWord} by supplier · unit: {unit}</p>
+        <div className="flex items-center gap-3">
+          <span className={`w-3 h-3 rounded-full shrink-0 ${LEVEL_STYLES[n4Lvl].dot}`} />
+          <div>
+            <h2 className="text-lg font-bold text-slate-900">{category.name}</h2>
+            <p className="text-xs text-slate-500">Load per {periodWord} by supplier · unit: {unit}</p>
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-6 text-sm">
-          <Stat label="Total weekly capacity" value={weeklyCapTotal ? fmtNum(weeklyCapTotal) : 'Not defined'} />
-          <Stat label="Weekly demand" value={demand ? fmtNum(demand) : 'Not defined'} />
-          <Stat label={`Avg / ${periodWord} (${rangeSummaryLabel})`} value={fmtNum(Math.round(totalAvgLoad))} />
-          <Stat label="Open balance" value={fmtNum(agg.totalOpen)} />
+        <div className="flex flex-wrap items-center gap-4 text-sm">
           {onExportCategory && (
             <button
               type="button"
@@ -568,6 +625,55 @@ function CategoryDetail({ category, agg, buckets, mode, onCell, onExportCategory
               <Download size={13} /> Export Category
             </button>
           )}
+        </div>
+      </div>
+
+      {/* Selected Category Summary Strip (shown when clicking a category pill above) */}
+      <div className="px-5 py-3.5 bg-slate-50/75 border-b border-slate-200 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 items-center">
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Open Balance</div>
+          <div className="mt-0.5 flex items-baseline gap-1.5">
+            <span className="text-xl font-bold text-slate-900">{fmtCompact(agg.totalOpen)}</span>
+            <span className="text-xs text-slate-500">{unit} ({fmtNum(agg.totalOpen)})</span>
+          </div>
+        </div>
+
+        <div className="col-span-2 md:col-span-1 xl:col-span-2 bg-white px-3.5 py-2 rounded-lg border border-slate-200/80 shadow-2xs">
+          <div className="flex items-center justify-between text-xs">
+            <span className="font-semibold text-slate-600">Next 4 Weeks Load vs. Cap</span>
+            <span className={`font-bold ${LEVEL_STYLES[n4Lvl].text}`}>
+              {n4Cap ? `${fmtCompact(n4Load)} / ${fmtCompact(n4Cap)} · ${pct(n4Load, n4Cap)}` : `${fmtCompact(n4Load)} · no capacity`}
+            </span>
+          </div>
+          <div className="mt-1.5 h-2 rounded-full bg-slate-100 overflow-hidden">
+            <div
+              className="h-full rounded-full transition-all"
+              style={{ width: `${n4Cap ? n4PctWidth : 0}%`, background: LEVEL_STYLES[n4Lvl].bar }}
+            />
+          </div>
+        </div>
+
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Past Due</div>
+          <div className={`mt-0.5 text-base font-bold ${agg.pastDue > 0 ? 'text-red-600' : 'text-slate-700'}`}>
+            {fmtNum(agg.pastDue)} <span className="text-xs font-normal text-slate-500">{unit}</span>
+          </div>
+        </div>
+
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Weekly Cap / Demand</div>
+          <div className="mt-0.5 text-xs font-semibold text-slate-800">
+            Cap: <span className="text-slate-900 font-bold">{weeklyCapTotal ? fmtNum(weeklyCapTotal) : '—'}</span>
+            <span className="mx-1 text-slate-300">|</span>
+            Dem: <span className="text-purple-700 font-bold">{demand ? fmtNum(demand) : '—'}</span>
+          </div>
+        </div>
+
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Avg / {periodWord} ({rangeSummaryLabel})</div>
+          <div className="mt-0.5 text-base font-bold text-indigo-700">
+            {fmtNum(Math.round(totalAvgLoad))} <span className="text-xs font-normal text-slate-500">{unit}</span>
+          </div>
         </div>
       </div>
 
@@ -657,6 +763,12 @@ function CategoryDetail({ category, agg, buckets, mode, onCell, onExportCategory
               <tr>
                 <th className="th sticky left-0 z-10 min-w-56">Supplier</th>
                 <th className="th text-right">Cap / {periodWord}</th>
+                <th
+                  className="th text-center min-w-24"
+                  title="Capacity Confirmation Status (click badge to toggle Confirmed / Pending)"
+                >
+                  Cap status
+                </th>
                 <th className="th text-right">Open total</th>
                 <th
                   className="th text-center min-w-24 bg-indigo-50/90 text-indigo-900 border-x border-indigo-200"
@@ -697,6 +809,8 @@ function CategoryDetail({ category, agg, buckets, mode, onCell, onExportCategory
                 )
                 const avgCap = rangeCapSum / avgPeriodCount
                 const avgLvl = utilLevel(avgLoad, avgCap)
+                const capStatus = resolveCapStatus(capStatusMap, category.id, s.code, s.weeklyCap)
+                const isConfirmed = capStatus === 'confirmed'
 
                 return (
                   <tr key={s.code} className="group">
@@ -707,6 +821,21 @@ function CategoryDetail({ category, agg, buckets, mode, onCell, onExportCategory
                       </div>
                     </td>
                     <td className="td text-right text-slate-600">{s.weeklyCap ? fmtNum(s.weeklyCap) : <span className="text-slate-400">—</span>}</td>
+                    <td className="td text-center">
+                      <button
+                        type="button"
+                        onClick={() => onToggleCapStatus?.(category.id, s.code, s.weeklyCap)}
+                        title={`Capacity is ${isConfirmed ? 'Confirmed' : 'Pending confirmation'} for ${s.name}. Click to toggle.`}
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border transition cursor-pointer ${
+                          isConfirmed
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                            : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                        }`}
+                      >
+                        {isConfirmed ? <CheckCircle2 size={11} className="shrink-0" /> : <Clock3 size={11} className="shrink-0" />}
+                        <span>{isConfirmed ? 'Confirmed' : 'Pending'}</span>
+                      </button>
+                    </td>
                     <td className="td text-right font-semibold">{fmtNum(s.total)}</td>
                     <td
                       className={`td text-center font-semibold border-x border-indigo-200 ${
@@ -787,6 +916,9 @@ function CategoryDetail({ category, agg, buckets, mode, onCell, onExportCategory
               <tr className="font-semibold">
                 <td className="td sticky left-0 z-10 bg-slate-50">Total load</td>
                 <td className="td text-right bg-slate-50">{weeklyCapTotal ? fmtNum(weeklyCapTotal) : '—'}</td>
+                <td className="td text-center bg-slate-50 text-[10px] text-slate-500 font-medium">
+                  {confirmedCount}/{suppliers.length} conf.
+                </td>
                 <td className="td text-right bg-slate-50">{fmtNum(agg.totalOpen)}</td>
                 <td
                   className={`td text-center border-x border-indigo-200 ${
@@ -811,6 +943,7 @@ function CategoryDetail({ category, agg, buckets, mode, onCell, onExportCategory
                 <tr>
                   <td className="td sticky left-0 z-10 bg-white text-purple-700">Demand</td>
                   <td className="td text-right text-purple-700">{fmtNum(demand)}</td>
+                  <td className="td" />
                   <td className="td" />
                   <td className="td text-center text-purple-700 font-semibold bg-purple-50/40 border-x border-indigo-200">
                     {fmtCompact(demand * (selectedTimeBuckets[0]?.capacityFactor ?? 1))}

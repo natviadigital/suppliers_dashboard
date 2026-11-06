@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { loadCurrentUpload, loadMaster, loadMonitoredOrders, loadRawOpenOrders, loadScenarios, loadScenarioItems } from './api'
 import { loadSupplierHolidays, saveSupplierHolidays, buildHolidayLookup } from './holidays'
+import { loadCapStatusMap, saveCapStatusMap, resolveCapStatus, loadTdlItems, saveTdlItems } from './capStatusAndTdl'
 
 const DataContext = createContext(null)
 
@@ -14,12 +15,41 @@ export function DataProvider({ children }) {
   const [scenarioItems, setScenarioItems] = useState([])
   const [simulationActive, setSimulationActive] = useState(false)
   const [holidays, setHolidays] = useState(() => loadSupplierHolidays())
+  const [capStatusMap, setCapStatusMap] = useState(() => loadCapStatusMap())
+  const [tdlItems, setTdlItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
   const updateHolidays = useCallback((nextHolidays) => {
     setHolidays(nextHolidays)
     saveSupplierHolidays(nextHolidays)
+  }, [])
+
+  const setSupplierCapStatus = useCallback((categoryId, vendorCode, nextStatus) => {
+    setCapStatusMap((prev) => {
+      const next = { ...prev, [`${categoryId}_${vendorCode}`]: nextStatus }
+      saveCapStatusMap(next)
+      return next
+    })
+  }, [])
+
+  const toggleSupplierCapStatus = useCallback((categoryId, vendorCode, weeklyCap) => {
+    setCapStatusMap((prev) => {
+      const current = resolveCapStatus(prev, categoryId, vendorCode, weeklyCap)
+      const nextStatus = current === 'confirmed' ? 'pending' : 'confirmed'
+      const next = { ...prev, [`${categoryId}_${vendorCode}`]: nextStatus }
+      saveCapStatusMap(next)
+      return next
+    })
+  }, [])
+
+  const updateTdlItems = useCallback((nextItems) => {
+    setTdlItems(nextItems)
+    saveTdlItems(nextItems)
+  }, [])
+
+  useEffect(() => {
+    loadTdlItems().then(setTdlItems).catch(() => {})
   }, [])
 
   const holidayLookup = useMemo(() => buildHolidayLookup(holidays), [holidays])
@@ -132,6 +162,11 @@ export function DataProvider({ children }) {
     holidays,
     holidayLookup,
     updateHolidays,
+    capStatusMap,
+    setSupplierCapStatus,
+    toggleSupplierCapStatus,
+    tdlItems,
+    updateTdlItems,
     loading,
     error,
     reloadAll,
