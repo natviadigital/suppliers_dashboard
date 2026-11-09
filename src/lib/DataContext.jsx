@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { loadCurrentUpload, loadMaster, loadMonitoredOrders, loadRawOpenOrders, loadScenarios, loadScenarioItems } from './api'
 import { loadSupplierHolidays, saveSupplierHolidays, buildHolidayLookup } from './holidays'
 import { loadCapStatusMap, saveCapStatusMap, resolveCapStatus, loadTdlItems, saveTdlItems } from './capStatusAndTdl'
+import { loadHistoryCubes } from './historyApi'
 
 const DataContext = createContext(null)
 
@@ -17,6 +18,8 @@ export function DataProvider({ children }) {
   const [holidays, setHolidays] = useState(() => loadSupplierHolidays())
   const [capStatusMap, setCapStatusMap] = useState(() => loadCapStatusMap())
   const [tdlItems, setTdlItems] = useState([])
+  const [receiptsCube, setReceiptsCube] = useState(null)
+  const [transactionsCube, setTransactionsCube] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -51,6 +54,18 @@ export function DataProvider({ children }) {
   useEffect(() => {
     loadTdlItems().then(setTdlItems).catch(() => {})
   }, [])
+
+  const reloadHistory = useCallback(async () => {
+    try {
+      const { receiptsCube: rc, transactionsCube: tc } = await loadHistoryCubes()
+      setReceiptsCube(rc)
+      setTransactionsCube(tc)
+    } catch {}
+  }, [])
+
+  useEffect(() => {
+    reloadHistory()
+  }, [reloadHistory])
 
   const holidayLookup = useMemo(() => buildHolidayLookup(holidays), [holidays])
 
@@ -167,6 +182,11 @@ export function DataProvider({ children }) {
     toggleSupplierCapStatus,
     tdlItems,
     updateTdlItems,
+    receiptsCube,
+    setReceiptsCube,
+    transactionsCube,
+    setTransactionsCube,
+    reloadHistory,
     loading,
     error,
     reloadAll,

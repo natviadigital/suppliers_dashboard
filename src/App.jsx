@@ -26,7 +26,7 @@ const PAGES = [
   { id: 'simulator', label: 'Simulator (2027+)', icon: Sparkles, badge: 'New' },
   { id: 'orders', label: 'Open Orders', icon: ListOrdered },
   { id: 'mother', label: 'Mother Table', icon: Table2 },
-  { id: 'upload', label: 'Upload Open Order', icon: UploadIcon },
+  { id: 'upload', label: 'Upload Data Files', icon: UploadIcon },
   { id: 'settings', label: 'Settings', icon: SettingsIcon },
 ]
 

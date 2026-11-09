@@ -22,6 +22,8 @@ import {
 } from 'lucide-react'
 import { useData } from '../lib/DataContext'
 import { resolveCapStatus } from '../lib/capStatusAndTdl'
+import { computeHistoryAnalytics } from '../lib/historyApi'
+import CategoryHistoryAnalysis from '../components/CategoryHistoryAnalysis'
 import TdlPage from './TdlPage'
 import FilterBar from '../components/FilterBar'
 import Modal from '../components/Modal'
@@ -53,6 +55,8 @@ export default function Dashboard({ filters, setFilters }) {
     holidayLookup,
     capStatusMap,
     toggleSupplierCapStatus,
+    receiptsCube,
+    transactionsCube,
   } = useData()
 
   const [mode, setMode] = useState('week')
@@ -111,6 +115,21 @@ export default function Dashboard({ filters, setFilters }) {
   const activeCat = categories.find((c) => c.id === selectedCat)
     ?? categories.find((c) => aggs[c.id]?.totalOpen > 0) ?? categories[0]
   const agg = activeCat ? aggs[activeCat.id] : null
+
+  // Compute Past 9M Purchases & Past 12M Usage averages based on Mother Table
+  const historyAnalytics = useMemo(
+    () =>
+      computeHistoryAnalytics({
+        receiptsCube,
+        transactionsCube,
+        master,
+        lookups,
+        orders: effectiveOrders,
+        filters,
+        mode,
+      }),
+    [receiptsCube, transactionsCube, master, lookups, effectiveOrders, filters, mode]
+  )
 
   const scoped = filtered.filter((o) => !filters.category || String(o.category_id) === filters.category)
   const kpis = {
@@ -464,6 +483,8 @@ export default function Dashboard({ filters, setFilters }) {
         <CategoryDetail
           category={activeCat}
           agg={agg}
+          histCat={historyAnalytics.byCategory?.[activeCat.id]}
+          historyAnalytics={historyAnalytics}
           next4={next4[activeCat.id]}
           buckets={buckets}
           mode={mode}
@@ -473,6 +494,17 @@ export default function Dashboard({ filters, setFilters }) {
           onExportCategory={() => handleExport('activeCat')}
         />
       )}
+
+      {/* Past vs. Future Analysis by Part Category (Expandable by Vendor + 2-Tab Export) */}
+      <CategoryHistoryAnalysis
+        categories={categories}
+        aggs={aggs}
+        historyAnalytics={historyAnalytics}
+        buckets={buckets}
+        mode={mode}
+        capStatusMap={capStatusMap}
+        onToggleCapStatus={toggleSupplierCapStatus}
+      />
 
       {/* TDL (Action & Status Tracker) Section on Dashboard */}
       <div className="space-y-3 pt-2">
@@ -520,11 +552,17 @@ function Kpi({ icon: Icon, label, value, tone, hint }) {
   )
 }
 
-function CategoryDetail({ category, agg, next4, buckets, mode, capStatusMap, onToggleCapStatus, onCell, onExportCategory }) {
+function CategoryDetail({ category, agg, histCat, historyAnalytics, next4, buckets, mode, capStatusMap, onToggleCapStatus, onCell, onExportCategory }) {
   const { suppliers, chartData, totals, bucketCapTotals, weeklyCapTotal, demand } = agg
   const unit = category.unit
   const periodWord = mode === 'week' ? 'week' : 'month'
+  const periodShort = mode === 'week' ? 'wk' : 'mo'
   const withLoad = suppliers.filter((s) => s.total > 0)
+
+  const catPurch9MAvg = histCat?.purch9MAvg ?? 0
+  const catPurch9MTotal = histCat?.purch9MTotal ?? 0
+  const catUsage12MAvg = histCat?.usage12MAvg ?? 0
+  const catUsage12MTotal = histCat?.usage12MTotal ?? 0
 
   const n4Load = next4?.load ?? 0
   const n4Cap = next4?.cap ?? 0
@@ -629,23 +667,23 @@ function CategoryDetail({ category, agg, next4, buckets, mode, capStatusMap, onT
       </div>
 
       {/* Selected Category Summary Strip (shown when clicking a category pill above) */}
-      <div className="px-5 py-3.5 bg-slate-50/75 border-b border-slate-200 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 items-center">
+      <div className="px-5 py-3 bg-slate-50/75 border-b border-slate-200 grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3 items-center">
         <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Open Balance</div>
-          <div className="mt-0.5 flex items-baseline gap-1.5">
-            <span className="text-xl font-bold text-slate-900">{fmtCompact(agg.totalOpen)}</span>
-            <span className="text-xs text-slate-500">{unit} ({fmtNum(agg.totalOpen)})</span>
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Open Balance</div>
+          <div className="mt-0.5 flex items-baseline gap-1">
+            <span className="text-lg font-bold text-slate-900">{fmtCompact(agg.totalOpen)}</span>
+            <span className="text-[11px] text-slate-500">{unit}</span>
           </div>
         </div>
 
-        <div className="col-span-2 md:col-span-1 xl:col-span-2 bg-white px-3.5 py-2 rounded-lg border border-slate-200/80 shadow-2xs">
-          <div className="flex items-center justify-between text-xs">
+        <div className="col-span-2 md:col-span-2 xl:col-span-2 bg-white px-3 py-1.5 rounded-lg border border-slate-200/80 shadow-2xs">
+          <div className="flex items-center justify-between text-[11px]">
             <span className="font-semibold text-slate-600">Next 4 Weeks Load vs. Cap</span>
             <span className={`font-bold ${LEVEL_STYLES[n4Lvl].text}`}>
               {n4Cap ? `${fmtCompact(n4Load)} / ${fmtCompact(n4Cap)} · ${pct(n4Load, n4Cap)}` : `${fmtCompact(n4Load)} · no capacity`}
             </span>
           </div>
-          <div className="mt-1.5 h-2 rounded-full bg-slate-100 overflow-hidden">
+          <div className="mt-1 h-1.5 rounded-full bg-slate-100 overflow-hidden">
             <div
               className="h-full rounded-full transition-all"
               style={{ width: `${n4Cap ? n4PctWidth : 0}%`, background: LEVEL_STYLES[n4Lvl].bar }}
@@ -654,25 +692,32 @@ function CategoryDetail({ category, agg, next4, buckets, mode, capStatusMap, onT
         </div>
 
         <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Past Due</div>
-          <div className={`mt-0.5 text-base font-bold ${agg.pastDue > 0 ? 'text-red-600' : 'text-slate-700'}`}>
-            {fmtNum(agg.pastDue)} <span className="text-xs font-normal text-slate-500">{unit}</span>
-          </div>
-        </div>
-
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Weekly Cap / Demand</div>
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Past Due / Cap</div>
           <div className="mt-0.5 text-xs font-semibold text-slate-800">
-            Cap: <span className="text-slate-900 font-bold">{weeklyCapTotal ? fmtNum(weeklyCapTotal) : '—'}</span>
+            PD: <span className={agg.pastDue > 0 ? 'text-red-600 font-bold' : 'text-slate-700'}>{fmtCompact(agg.pastDue)}</span>
             <span className="mx-1 text-slate-300">|</span>
-            Dem: <span className="text-purple-700 font-bold">{demand ? fmtNum(demand) : '—'}</span>
+            Cap: <span className="text-slate-900 font-bold">{weeklyCapTotal ? fmtCompact(weeklyCapTotal) : '—'}</span>
           </div>
         </div>
 
         <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Avg / {periodWord} ({rangeSummaryLabel})</div>
-          <div className="mt-0.5 text-base font-bold text-indigo-700">
-            {fmtNum(Math.round(totalAvgLoad))} <span className="text-xs font-normal text-slate-500">{unit}</span>
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-cyan-700">Past 9M Purch / {periodShort}</div>
+          <div className="mt-0.5 text-sm font-bold text-cyan-900">
+            {catPurch9MAvg > 0 ? fmtNum(Math.round(catPurch9MAvg)) : '—'} <span className="text-[10px] font-normal text-slate-500">{unit}</span>
+          </div>
+        </div>
+
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-amber-700">Past 12M Usage / {periodShort}</div>
+          <div className="mt-0.5 text-sm font-bold text-amber-900">
+            {catUsage12MAvg > 0 ? fmtNum(Math.round(catUsage12MAvg)) : '—'} <span className="text-[10px] font-normal text-slate-500">{unit}</span>
+          </div>
+        </div>
+
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-indigo-700">Future PO / {periodShort} ({rangeSummaryLabel})</div>
+          <div className="mt-0.5 text-sm font-bold text-indigo-700">
+            {fmtNum(Math.round(totalAvgLoad))} <span className="text-[10px] font-normal text-slate-500">{unit}</span>
           </div>
         </div>
       </div>
@@ -758,24 +803,48 @@ function CategoryDetail({ category, agg, next4, buckets, mode, capStatusMap, onT
         )}
 
         <div className="overflow-x-auto pb-2">
-          <table className="text-xs border-separate border-spacing-0">
+          <table className="text-[11px] border-separate border-spacing-0 w-full">
             <thead>
               <tr>
-                <th className="th sticky left-0 z-10 min-w-56">Supplier</th>
-                <th className="th text-right">Cap / {periodWord}</th>
+                <th className="th py-1.5 px-2.5 sticky left-0 z-10 min-w-44 max-w-52 text-[10px]">Supplier</th>
+                <th className="th py-1.5 px-2 text-right text-[10px] whitespace-nowrap">Cap / {periodShort}</th>
                 <th
-                  className="th text-center min-w-24"
+                  className="th py-1.5 px-1.5 text-center min-w-20 text-[10px]"
                   title="Capacity Confirmation Status (click badge to toggle Confirmed / Pending)"
                 >
                   Cap status
                 </th>
-                <th className="th text-right">Open total</th>
+                <th className="th py-1.5 px-2 text-right text-[10px] whitespace-nowrap">Open total</th>
+
+                {/* NEW COLUMN 1: Past 9M Purchases Average */}
                 <th
-                  className="th text-center min-w-24 bg-indigo-50/90 text-indigo-900 border-x border-indigo-200"
-                  title={`Average load per ${periodWord} across selected range: ${firstSelBucket?.label ?? ''} (${firstSelBucket?.sub ?? ''}) to ${lastSelBucket?.label ?? ''} (${lastSelBucket?.sub ?? ''}) · ${avgPeriodCount} ${periodWord}s`}
+                  className="th py-1.5 px-2 text-center min-w-20 bg-cyan-50/90 text-cyan-950 border-l border-cyan-200 text-[10px]"
+                  title="Average purchases (PO Receipts) over the last 9 months (39 weeks / 9 months) based on Mother Table"
                 >
-                  <div>Avg / {periodWord}</div>
-                  <div className="font-mono text-[10px] font-semibold text-indigo-600 normal-case">
+                  <div>9M Purch / {periodShort}</div>
+                  <div className="font-mono text-[9px] font-semibold text-cyan-700 normal-case">
+                    Past 9M Avg
+                  </div>
+                </th>
+
+                {/* NEW COLUMN 2: Past 12M Usage Average */}
+                <th
+                  className="th py-1.5 px-2 text-center min-w-20 bg-amber-50/90 text-amber-950 border-x border-amber-200 text-[10px]"
+                  title="Average consumption (Issues & Adjustments) over the last 12 months (52 weeks / 12 months) based on Mother Table"
+                >
+                  <div>12M Usage / {periodShort}</div>
+                  <div className="font-mono text-[9px] font-semibold text-amber-700 normal-case">
+                    Past 12M Avg
+                  </div>
+                </th>
+
+                {/* RENAMED FUTURE COLUMN: Future Open PO Average */}
+                <th
+                  className="th py-1.5 px-2 text-center min-w-22 bg-indigo-50/90 text-indigo-900 border-r border-indigo-200 text-[10px]"
+                  title={`Future Open PO average load per ${periodWord} across selected range: ${firstSelBucket?.label ?? ''} (${firstSelBucket?.sub ?? ''}) to ${lastSelBucket?.label ?? ''} (${lastSelBucket?.sub ?? ''}) · ${avgPeriodCount} ${periodWord}s`}
+                >
+                  <div>Future PO / {periodShort}</div>
+                  <div className="font-mono text-[9px] font-semibold text-indigo-600 normal-case">
                     {rangeSummaryLabel}
                   </div>
                 </th>
@@ -784,7 +853,7 @@ function CategoryDetail({ category, agg, next4, buckets, mode, capStatusMap, onT
                   return (
                     <th
                       key={b.key}
-                      className={`th text-center min-w-16 ${
+                      className={`th py-1.5 px-1 text-center min-w-13 text-[10px] ${
                         b.key === PAST_DUE
                           ? 'bg-red-50 text-red-700'
                           : inAvg
@@ -792,8 +861,8 @@ function CategoryDetail({ category, agg, next4, buckets, mode, capStatusMap, onT
                             : 'opacity-60'
                       }`}
                     >
-                      <div>{b.label}</div>
-                      <div className="font-normal normal-case text-slate-400">{b.sub}</div>
+                      <div className="leading-tight">{b.label}</div>
+                      <div className="font-normal normal-case text-slate-400 text-[9px] leading-tight">{b.sub}</div>
                     </th>
                   )
                 })}
@@ -812,47 +881,79 @@ function CategoryDetail({ category, agg, next4, buckets, mode, capStatusMap, onT
                 const capStatus = resolveCapStatus(capStatusMap, category.id, s.code, s.weeklyCap)
                 const isConfirmed = capStatus === 'confirmed'
 
+                const sHist = histCat?.byVendorCode?.[s.code]
+                const sPurch9MAvg = sHist?.purch9MAvg ?? 0
+                const sPurch9MTotal = sHist?.purch9MTotal ?? 0
+                const sUsage12MAvg = sHist?.usage12MAvg ?? 0
+                const sUsage12MTotal = sHist?.usage12MTotal ?? 0
+
                 return (
                   <tr key={s.code} className="group">
-                    <td className="td sticky left-0 z-10 bg-white group-hover:bg-slate-50 max-w-64">
-                      <div className="flex items-center gap-2">
-                        <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: s.color }} />
-                        <span className="truncate" title={`${s.name} (${s.code})`}>{s.name}</span>
+                    <td className="td py-1 px-2.5 sticky left-0 z-10 bg-white group-hover:bg-slate-50 max-w-52">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-xs shrink-0" style={{ background: s.color }} />
+                        <span className="truncate font-medium" title={`${s.name} (${s.code})`}>{s.name}</span>
                       </div>
                     </td>
-                    <td className="td text-right text-slate-600">{s.weeklyCap ? fmtNum(s.weeklyCap) : <span className="text-slate-400">—</span>}</td>
-                    <td className="td text-center">
+                    <td className="td py-1 px-2 text-right text-slate-600 font-mono">{s.weeklyCap ? fmtNum(s.weeklyCap) : <span className="text-slate-400">—</span>}</td>
+                    <td className="td py-1 px-1.5 text-center">
                       <button
                         type="button"
                         onClick={() => onToggleCapStatus?.(category.id, s.code, s.weeklyCap)}
                         title={`Capacity is ${isConfirmed ? 'Confirmed' : 'Pending confirmation'} for ${s.name}. Click to toggle.`}
-                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border transition cursor-pointer ${
+                        className={`inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full text-[9px] font-semibold border transition cursor-pointer ${
                           isConfirmed
                             ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
                             : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
                         }`}
                       >
-                        {isConfirmed ? <CheckCircle2 size={11} className="shrink-0" /> : <Clock3 size={11} className="shrink-0" />}
+                        {isConfirmed ? <CheckCircle2 size={10} className="shrink-0" /> : <Clock3 size={10} className="shrink-0" />}
                         <span>{isConfirmed ? 'Confirmed' : 'Pending'}</span>
                       </button>
                     </td>
-                    <td className="td text-right font-semibold">{fmtNum(s.total)}</td>
+                    <td className="td py-1 px-2 text-right font-semibold font-mono">{fmtNum(s.total)}</td>
+
+                    {/* Supplier Past 9M Purchases Avg */}
                     <td
-                      className={`td text-center font-semibold border-x border-indigo-200 ${
+                      className="td py-1 px-2 text-center font-semibold border-l border-cyan-200 bg-cyan-50/35 text-cyan-900"
+                      title={
+                        sPurch9MTotal > 0
+                          ? `${s.name} — Past 9M Purchases\nTotal 9M Receipts: ${fmtNum(Math.round(sPurch9MTotal))} ${unit}\nAvg / ${periodWord}: ${fmtNum(Math.round(sPurch9MAvg))} ${unit}/${periodShort}`
+                          : 'No PO receipts recorded in last 9M for this supplier'
+                      }
+                    >
+                      {sPurch9MAvg > 0 ? fmtCompact(sPurch9MAvg) : <span className="text-slate-300">·</span>}
+                    </td>
+
+                    {/* Supplier Past 12M Usage Avg */}
+                    <td
+                      className="td py-1 px-2 text-center font-semibold border-x border-amber-200 bg-amber-50/30 text-amber-900"
+                      title={
+                        sUsage12MTotal > 0
+                          ? `${s.name} — Part-Matched Past 12M Usage\nTotal 12M Issues/Adj: ${fmtNum(Math.round(sUsage12MTotal))} ${unit}\nAvg / ${periodWord}: ${fmtNum(Math.round(sUsage12MAvg))} ${unit}/${periodShort}\n(Category Total 12M Avg: ${fmtNum(Math.round(catUsage12MAvg))} ${unit}/${periodShort})`
+                          : `Category Total 12M Usage Avg: ${fmtNum(Math.round(catUsage12MAvg))} ${unit}/${periodShort} (see Total row)`
+                      }
+                    >
+                      {sUsage12MAvg > 0 ? fmtCompact(sUsage12MAvg) : <span className="text-slate-300">·</span>}
+                    </td>
+
+                    {/* Supplier Future Open PO Avg */}
+                    <td
+                      className={`td py-1 px-2 text-center font-semibold border-r border-indigo-200 ${
                         avgLoad > 0 ? LEVEL_STYLES[avgLvl].cell : 'bg-indigo-50/30 text-slate-400'
                       }`}
                       title={[
-                        `${s.name} — Average (${rangeSummaryLabel})`,
+                        `${s.name} — Future Open PO Average (${rangeSummaryLabel})`,
                         `Period: ${firstSelBucket?.label ?? ''} (${firstSelBucket?.sub ?? ''}) to ${lastSelBucket?.label ?? ''} (${lastSelBucket?.sub ?? ''})`,
                         `Total in range: ${fmtNum(rangeSum)} ${unit} across ${avgPeriodCount} ${periodWord}s`,
-                        `Average load: ${fmtNum(Math.round(avgLoad))} ${unit}/${periodWord}`,
+                        `Future Avg load: ${fmtNum(Math.round(avgLoad))} ${unit}/${periodWord}`,
                         avgCap ? `Avg Effective Capacity: ${fmtNum(Math.round(avgCap))} ${unit}/${periodWord} (${pct(avgLoad, avgCap)})` : null,
                       ].filter(Boolean).join('\n')}
                     >
                       {avgLoad > 0 ? (
                         <>
-                          <div>{fmtCompact(avgLoad)}</div>
-                          {avgCap > 0 && <div className="text-[10px] opacity-75">{pct(avgLoad, avgCap)}</div>}
+                          <div className="leading-tight">{fmtCompact(avgLoad)}</div>
+                          {avgCap > 0 && <div className="text-[9px] opacity-75 leading-tight">{pct(avgLoad, avgCap)}</div>}
                         </>
                       ) : '·'}
                     </td>
@@ -890,18 +991,18 @@ function CategoryDetail({ category, agg, next4, buckets, mode, capStatusMap, onT
                         <td key={b.key} onClick={() => v && onCell(s, b)}
                           title={cellTitle}
                           style={lvl === 'holiday' ? { backgroundImage: 'repeating-linear-gradient(-45deg, rgba(244,63,94,0.06), rgba(244,63,94,0.06) 4px, rgba(255,228,230,0.45) 4px, rgba(255,228,230,0.45) 8px)' } : undefined}
-                          className={`td text-center border-l border-white ${cellClass} ${!inAvg ? 'opacity-50' : ''} ${v ? 'cursor-pointer hover:ring-2 hover:ring-indigo-400 hover:ring-inset' : ''}`}>
+                          className={`td py-1 px-1 text-center border-l border-white ${cellClass} ${!inAvg ? 'opacity-50' : ''} ${v ? 'cursor-pointer hover:ring-2 hover:ring-indigo-400 hover:ring-inset' : ''}`}>
                           {v ? (
                             <>
-                              <div>{fmtCompact(v)}</div>
+                              <div className="leading-tight">{fmtCompact(v)}</div>
                               {isBlockedWeek ? (
-                                <div className="text-[9px] font-bold uppercase text-rose-800 bg-rose-100/80 rounded px-1 inline-block">HOL</div>
+                                <div className="text-[8px] font-bold uppercase text-rose-800 bg-rose-100/80 rounded px-0.5 inline-block">HOL</div>
                               ) : (
-                                cap > 0 && b.key !== PAST_DUE && <div className="text-[10px] opacity-70">{pct(v, cap)}</div>
+                                cap > 0 && b.key !== PAST_DUE && <div className="text-[9px] opacity-70 leading-tight">{pct(v, cap)}</div>
                               )}
                             </>
                           ) : isBlockedWeek ? (
-                            <span className="text-[10px] font-bold uppercase tracking-tighter text-rose-600 px-1 py-0.5 rounded bg-white/80 border border-rose-200">
+                            <span className="text-[9px] font-bold uppercase tracking-tighter text-rose-600 px-1 py-0.2 rounded bg-white/80 border border-rose-200">
                               HOL
                             </span>
                           ) : '·'}
@@ -914,21 +1015,39 @@ function CategoryDetail({ category, agg, next4, buckets, mode, capStatusMap, onT
             </tbody>
             <tfoot>
               <tr className="font-semibold">
-                <td className="td sticky left-0 z-10 bg-slate-50">Total load</td>
-                <td className="td text-right bg-slate-50">{weeklyCapTotal ? fmtNum(weeklyCapTotal) : '—'}</td>
-                <td className="td text-center bg-slate-50 text-[10px] text-slate-500 font-medium">
+                <td className="td py-1.5 px-2.5 sticky left-0 z-10 bg-slate-50">Total load</td>
+                <td className="td py-1.5 px-2 text-right bg-slate-50 font-mono">{weeklyCapTotal ? fmtNum(weeklyCapTotal) : '—'}</td>
+                <td className="td py-1.5 px-1.5 text-center bg-slate-50 text-[9px] text-slate-500 font-medium">
                   {confirmedCount}/{suppliers.length} conf.
                 </td>
-                <td className="td text-right bg-slate-50">{fmtNum(agg.totalOpen)}</td>
+                <td className="td py-1.5 px-2 text-right bg-slate-50 font-mono">{fmtNum(agg.totalOpen)}</td>
+
+                {/* Total Category Past 9M Purchases Avg */}
                 <td
-                  className={`td text-center border-x border-indigo-200 ${
+                  className="td py-1.5 px-2 text-center border-l border-cyan-200 bg-cyan-100/60 text-cyan-950 font-bold"
+                  title={`Category Total Past 9M Purchases: ${fmtNum(Math.round(catPurch9MTotal))} ${unit}\n9M Avg / ${periodWord}: ${fmtNum(Math.round(catPurch9MAvg))} ${unit}/${periodShort}`}
+                >
+                  {catPurch9MAvg > 0 ? fmtCompact(catPurch9MAvg) : '·'}
+                </td>
+
+                {/* Total Category Past 12M Usage Avg */}
+                <td
+                  className="td py-1.5 px-2 text-center border-x border-amber-200 bg-amber-100/60 text-amber-950 font-bold"
+                  title={`Category Total Past 12M Usage (Issues & Adjustments): ${fmtNum(Math.round(catUsage12MTotal))} ${unit}\n12M Avg / ${periodWord}: ${fmtNum(Math.round(catUsage12MAvg))} ${unit}/${periodShort}`}
+                >
+                  {catUsage12MAvg > 0 ? fmtCompact(catUsage12MAvg) : '·'}
+                </td>
+
+                {/* Total Category Future Open PO Avg */}
+                <td
+                  className={`td py-1.5 px-2 text-center border-r border-indigo-200 ${
                     totalAvgLoad > 0 ? LEVEL_STYLES[totalAvgLvl].cell : 'bg-indigo-50/40 text-slate-400'
                   }`}
-                  title={`Total Average Load (${rangeSummaryLabel}): ${fmtNum(Math.round(totalAvgLoad))} ${unit}/${periodWord}${totalAvgCap ? `\nAvg Effective Capacity: ${fmtNum(Math.round(totalAvgCap))} (${pct(totalAvgLoad, totalAvgCap)})` : ''}`}
+                  title={`Total Future Open PO Average (${rangeSummaryLabel}): ${fmtNum(Math.round(totalAvgLoad))} ${unit}/${periodWord}${totalAvgCap ? `\nAvg Effective Capacity: ${fmtNum(Math.round(totalAvgCap))} (${pct(totalAvgLoad, totalAvgCap)})` : ''}`}
                 >
-                  {totalAvgLoad > 0 ? fmtCompact(totalAvgLoad) : '·'}
+                  <div className="leading-tight">{totalAvgLoad > 0 ? fmtCompact(totalAvgLoad) : '·'}</div>
                   {totalAvgCap > 0 && totalAvgLoad > 0 && (
-                    <div className="text-[10px] opacity-75">{pct(totalAvgLoad, totalAvgCap)}</div>
+                    <div className="text-[9px] opacity-75 leading-tight">{pct(totalAvgLoad, totalAvgCap)}</div>
                   )}
                 </td>
                 {buckets.map((b) => {
@@ -936,21 +1055,28 @@ function CategoryDetail({ category, agg, next4, buckets, mode, capStatusMap, onT
                   const cap = bucketCapTotals?.[b.key] ?? (weeklyCapTotal * b.capacityFactor)
                   const lvl = b.key === PAST_DUE ? (v ? 'red' : 'empty') : utilLevel(v, cap)
                   const inAvg = b.key === PAST_DUE || selectedKeySet.has(b.key)
-                  return <td key={b.key} className={`td text-center border-l border-white ${LEVEL_STYLES[lvl].cell} ${!inAvg ? 'opacity-50' : ''}`}>{v ? fmtCompact(v) : '·'}{cap > 0 && v > 0 && b.key !== PAST_DUE && <div className="text-[10px] opacity-70">{pct(v, cap)}</div>}</td>
+                  return (
+                    <td key={b.key} className={`td py-1 px-1 text-center border-l border-white ${LEVEL_STYLES[lvl].cell} ${!inAvg ? 'opacity-50' : ''}`}>
+                      <div className="leading-tight">{v ? fmtCompact(v) : '·'}</div>
+                      {cap > 0 && v > 0 && b.key !== PAST_DUE && <div className="text-[9px] opacity-70 leading-tight">{pct(v, cap)}</div>}
+                    </td>
+                  )
                 })}
               </tr>
               {demand > 0 && (
                 <tr>
-                  <td className="td sticky left-0 z-10 bg-white text-purple-700">Demand</td>
-                  <td className="td text-right text-purple-700">{fmtNum(demand)}</td>
-                  <td className="td" />
-                  <td className="td" />
-                  <td className="td text-center text-purple-700 font-semibold bg-purple-50/40 border-x border-indigo-200">
+                  <td className="td py-1 px-2.5 sticky left-0 z-10 bg-white text-purple-700">Demand</td>
+                  <td className="td py-1 px-2 text-right text-purple-700 font-mono">{fmtNum(demand)}</td>
+                  <td className="td py-1 px-1.5" />
+                  <td className="td py-1 px-2" />
+                  <td className="td py-1 px-2 border-l border-cyan-100" />
+                  <td className="td py-1 px-2 border-x border-amber-100" />
+                  <td className="td py-1 px-2 text-center text-purple-700 font-semibold bg-purple-50/40 border-r border-indigo-200">
                     {fmtCompact(demand * (selectedTimeBuckets[0]?.capacityFactor ?? 1))}
                   </td>
                   {buckets.map((b) => {
                     const d = demand * b.capacityFactor; const v = totals[b.key] ?? 0
-                    return <td key={b.key} className="td text-center text-purple-700" title={d ? `Load vs demand: ${pct(v, d)}` : ''}>{d ? fmtCompact(d) : ''}</td>
+                    return <td key={b.key} className="td py-1 px-1 text-center text-purple-700" title={d ? `Load vs demand: ${pct(v, d)}` : ''}>{d ? fmtCompact(d) : ''}</td>
                   })}
                 </tr>
               )}
