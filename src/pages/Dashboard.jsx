@@ -642,6 +642,15 @@ function CategoryDetail({ category, agg, histCat, historyAnalytics, next4, bucke
   const totalAvgCap = totalSelectedCapSum / avgPeriodCount
   const totalAvgLvl = utilLevel(totalAvgLoad, totalAvgCap)
 
+  const enrichedChartData = useMemo(
+    () =>
+      chartData.map((row) => ({
+        ...row,
+        usage12m: row.key === PAST_DUE ? null : (catUsage12MAvg > 0 ? Math.round(catUsage12MAvg) : null),
+      })),
+    [chartData, catUsage12MAvg]
+  )
+
   return (
     <div className="card">
       <div className="p-5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-4">
@@ -751,7 +760,7 @@ function CategoryDetail({ category, agg, histCat, historyAnalytics, next4, bucke
           <div className="text-center text-slate-500 py-12">No open orders for this category with the current filters.</div>
         ) : (
           <ResponsiveContainer width="100%" height={380}>
-            <ComposedChart data={chartData} margin={{ top: 10, right: 20, left: 10, bottom: 0 }}>
+            <ComposedChart data={enrichedChartData} margin={{ top: 10, right: 20, left: 10, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
               <XAxis dataKey="label" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
               <YAxis tickFormatter={fmtCompact} tick={{ fontSize: 11 }} width={60} />
@@ -761,6 +770,18 @@ function CategoryDetail({ category, agg, histCat, historyAnalytics, next4, bucke
                 <Bar key={s.code} dataKey={s.code} name={s.name} stackId="load" fill={s.color} maxBarSize={48} />
               ))}
               {weeklyCapTotal > 0 && <Line dataKey="capacity" name="Effective capacity (excl. holidays)" type="stepAfter" stroke="#0f172a" strokeWidth={2} dot={false} connectNulls />}
+              {catUsage12MAvg > 0 && (
+                <Line
+                  dataKey="usage12m"
+                  name={`12M Avg Usage (${fmtNum(Math.round(catUsage12MAvg))}/${periodShort})`}
+                  type="stepAfter"
+                  stroke="#d97706"
+                  strokeWidth={2.2}
+                  strokeDasharray="6 4"
+                  dot={false}
+                  connectNulls
+                />
+              )}
               {demand > 0 && <Line dataKey="demand" name="Demand" type="stepAfter" stroke="#a855f7" strokeWidth={2} strokeDasharray="6 4" dot={false} connectNulls />}
               <Brush
                 dataKey="label"
@@ -1343,6 +1364,7 @@ function ChartTooltip({ active, payload, label, suppliers, unit }) {
       ))}
       <div className="border-t border-slate-200 mt-1 pt-1 flex justify-between font-semibold"><span>Total</span><span>{fmtNum(row.total)} {unit}</span></div>
       {row.capacity != null && <div className="flex justify-between"><span>Effective Capacity</span><span>{fmtNum(row.capacity)} · {pct(row.total, row.capacity)}</span></div>}
+      {row.usage12m != null && <div className="flex justify-between text-amber-700 font-medium"><span>12M Avg Usage</span><span>{fmtNum(row.usage12m)} {unit}</span></div>}
       {row.demand != null && <div className="flex justify-between text-purple-700"><span>Demand</span><span>{fmtNum(row.demand)}</span></div>}
     </div>
   )
